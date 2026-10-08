@@ -1,0 +1,5 @@
+
+main_prompt_path: prompts/main_prompt.txt
+rag_summarize_prompt_path: prompts/rag_summarize.txt
+# 报告规范是「追加」到主提示词后面的（不再整段替换系统提示词）
+report_addendum_path: prompts/report_addendum.txt

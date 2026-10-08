@@ -1,0 +1,31 @@
+{
+  "fingerprint": {
+    "embedding_model": "qwen3.7-text-embedding-flash",
+    "chat_model_name": "qwen3.7-max",
+    "rerank_model": "qwen3-rerank",
+    "rerank_enabled": true,
+    "max_distance": null,
+    "k": 3,
+    "rerank_fetch_k": 20,
+    "chunk_size": 200,
+    "chunk_overlap": 0,
+    "blocks": 330
+  },
+  "sets": {
+    "a": {
+      "keyword": 18,
+      "model": 20,
+      "total": 20
+    },
+    "b": {
+      "keyword": 16,
+      "model": 19,
+      "total": 20
+    }
+  },
+  "refusals": {
+    "passed": 6,
+    "total": 6
+  },
+  "note": "由 eval.retrieval_eval --snapshot 生成。配置指纹任一项变化都会使基线过期，需重拍。"
+}

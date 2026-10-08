@@ -1,0 +1,39 @@
+# ===== 环境变量 =====
+# 内含 DASHSCOPE / LANGSMITH / TAVILY / MINERU / SERPAPI 等多组真实 API Key
+.env
+.env.*
+!.env.example
+
+# ===== 向量库 =====
+# 可由 data/ 目录重建，且含大量二进制文件，不入库
+chroma_db/
+
+# ===== 对话记忆（LangGraph checkpointer）=====
+checkpoints.sqlite*
+
+# ===== 日志 =====
+logs/
+
+# ===== 旧版去重清单（已被 chroma_db/kb_meta.json 取代）=====
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ===== IDE =====
+.idea/
+.vscode/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+feedback.sqlite*
+kb_versions/
+
+admin_sessions.sqlite*
+
+.config_guard.sqlite*

@@ -1,0 +1,15 @@
+external_data_path: data/external/records.csv
+
+# 演示用参考月份。
+# mock 外部系统只覆盖 2025-01 ~ 2025-12，若返回真实当前月份会一条记录都查不到，
+# 所以这里固定一个落在数据范围内的月份，保证报告流程可跑通。
+# 接入真实外部系统时，删掉这一行（或留空），get_current_month 就会返回真实月份。
+demo_reference_month: "2025-12"
+
+# 每轮预算；时间在调用边界检查，不能强行取消正在执行的工具。
+max_model_calls: 12
+turn_timeout: 180
+context_max_chars: 24000
+
+# 普通问答直接返回原文；报告仍走摘要。上线前需对照评估拒答与质量。
+rag_raw_documents: true

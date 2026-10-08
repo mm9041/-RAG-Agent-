@@ -1,0 +1,32 @@
+# 模型配置（原 config/rag.yml，2026-09-19 改名）
+#
+# 这两个参数决定"用哪个模型"，其中 embedding_model_name 会参与向量库的
+# 参数指纹（见 chroma_db/kb_meta.json）：
+#   改 chat_model_name      -> 不需要重建向量库（不影响向量内容）
+#   改 embedding_model_name -> 必须重建（换了 embedding，新旧向量不在同一语义空间）
+# 2026-09-20 由 qwen3.7-plus 换成 qwen3.7-max（plus 的额度将耗尽）。
+# chat 模型**不在向量库参数指纹内** → 换它不需要重建向量库。
+# 但换 chat 模型必须重新验证三项"提示词契约"行为：
+#   ① 资料不覆盖时输出 [无覆盖]；② 检索为空时不换措辞重试；③ 报告流程的固定调用顺序。
+chat_model_name: "qwen3.7-flash"
+# 2026-09-20 由 text-embedding-v4 换成 qwen3.7-text-embedding-flash：
+# text-embedding-v4 的**免费额度用尽**（Free quota exhausted），
+# 而 flash 版可用。换 embedding 模型会触发向量库全量重建（它参与参数指纹）——
+# 这是设计如此：不同 embedding 的向量不在同一语义空间，混用必然出错。
+embedding_model_name: "qwen3.7-text-embedding-flash"
+
+# ---------------------------------------------------------------------------
+# 外部调用的超时与重试（2026-09-20 被两次故障逼出来补上的）
+#
+# 原本项目里没有任何显式配置，全靠 SDK 默认：`max_retries=2`、`read timeout=600s`。
+# 实测默认值不够用，原因有两个：
+#   1. SDK **只按 HTTP 状态码**重试 408/409/429/5xx，而 DashScope 把限流报成 **400**、
+#      额度用尽报成 **403** —— 都不在重试范围内，一次抖动直接失败；
+#   2. 600 秒的读超时意味着网关卡住时要等 10 分钟才报错，而不是快速失败。
+#
+# 另外，重试**必须分类**：额度用尽（Free quota exhausted）等几秒不会变好，
+# 重试纯属浪费时间，所以那种错误会立即抛出。分类逻辑见 utils/retry.py。
+request_timeout: 120      # 单次请求读超时（秒）。聊天可能要长回答，给宽松些；嵌入/检索远快于此
+max_retries: 3            # 可重试错误的退避重试次数（0 表示不重试）
+retry_backoff: 2          # 退避基数（秒），实际间隔 = backoff * 2^i，即 2s / 4s / 8s
+

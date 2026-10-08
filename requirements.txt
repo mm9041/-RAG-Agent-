@@ -1,0 +1,36 @@
+# 智扫通机器人智能客服 · 直接依赖
+#
+# 版本是 2026-09-19 在本机 Python 3.10.20 上实测通过的组合，建议直接用这份锁定版本。
+# LangChain 1.x 破坏性变更较频繁，不锁版本很容易出现"别人的代码跑不起来"。
+#
+# 安装：
+#   pip install -r requirements.txt
+
+# --- Agent 编排 ---
+langchain==1.3.18
+langchain-core==1.6.1
+langgraph==1.2.11
+langgraph-checkpoint-sqlite==3.1.1
+
+# --- 模型与向量库接入 ---
+langchain-openai==1.6.0
+langchain-chroma==1.1.0
+chromadb==1.5.9
+
+# 检索重排走 DashScope 自己的 SDK（rag/reranker.py）。
+# ⚠️ 这一度缺失，而 `from dashscope import TextReRank` 写在 try 块内 →
+# ImportError 被"重排失败降级"一起吞掉，于是照本文件装出来的干净环境会
+# **静默**失去重排（块级 hit@3 实测从 12/12 掉回 58%）、不报错、界面不显示。
+dashscope==1.27.3
+
+# --- 文档加载与切分 ---
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+pypdf==6.15.0
+
+# --- 界面 ---
+streamlit==1.64.0
+
+# --- 基础 ---
+python-dotenv==1.2.3
+PyYAML==6.0.3
