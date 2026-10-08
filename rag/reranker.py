@@ -22,10 +22,10 @@
 import importlib.util
 import os
 
-from dotenv import load_dotenv
 from langchain_core.documents import Document
 
 from utils.config_handler import chroma_conf
+from utils.env import ensure_env_loaded
 from utils.logger_handler import logger
 from utils.retry import call_with_retry
 
@@ -150,7 +150,7 @@ def rerank_health() -> str:
 
 
 if __name__ == '__main__':
-    load_dotenv("E:/PycharmProjects/AIagent/.env", override=True)
+    ensure_env_loaded()
     from rag.vector_store import VectorStoreService
 
     store = VectorStoreService()
