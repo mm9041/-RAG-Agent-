@@ -37,3 +37,4 @@ kb_versions/
 admin_sessions.sqlite*
 
 .config_guard.sqlite*
+/优化建议-2026-09-30.md
