@@ -38,3 +38,7 @@ admin_sessions.sqlite*
 
 .config_guard.sqlite*
 /优化建议-2026-09-30.md
+
+# ===== 本地工作记忆（WorkBuddy）=====
+# 项目内的会话记录与记忆文件，属于本地工作数据
+.workbuddy/
