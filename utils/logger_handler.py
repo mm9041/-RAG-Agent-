@@ -3,6 +3,7 @@ import os
 from logging.handlers import TimedRotatingFileHandler
 
 from utils.path_tool import get_abs_path
+from utils.redact import redact
 
 # 日志保存的根目录
 LOG_ROOT = get_abs_path("logs")
@@ -14,8 +15,25 @@ os.makedirs(LOG_ROOT, exist_ok=True)
 LOG_FILE_NAME = "agent.log"
 LOG_BACKUP_DAYS = 7
 
+class RedactingFormatter(logging.Formatter):
+    """在格式化结果上统一脱敏，一处覆盖所有日志出口。
+
+    挂在 Formatter 而不是 Filter 上，是刻意的选择：
+    Filter 只能改写 ``record.msg`` / ``record.args``，而异常栈是 ``format()``
+    阶段才拼进去的 —— ``logger.exception`` 的 traceback 里如果带了手机号、
+    地址，Filter 完全拦不住。改在 ``format()`` 的最终字符串上，msg、args、
+    stack_info、exc_info 就都在覆盖范围内了。
+
+    另外 Formatter 是挂在 handler 上的，各模块无论用哪个 logger 名字，
+    只要日志最终落到这两个 handler，就一定会经过这里。
+    """
+
+    def format(self, record):
+        return redact(super().format(record))
+
+
 # 日志的格式配置  error info debug
-DEFAULT_LOG_FORMAT = logging.Formatter(
+DEFAULT_LOG_FORMAT = RedactingFormatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 )
 

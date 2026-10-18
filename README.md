@@ -106,6 +106,17 @@ print(history)
 
 默认 `default` 会话不再允许匿名调用。自定义检查点通过 `ReactAgent(checkpointer=...)` 注入，历史列表和删除使用同一实例。
 
+## 数据脱敏
+
+`utils/redact.py` 是所有存储出口的统一过滤层：识别手机号、18 位身份证、16–19 位银行卡、邮箱、订单号（关键词锚定）和带前缀的详细地址，替换为 `138****5678` 这类掩码。
+
+- 日志：`utils/logger_handler.py` 的 `RedactingFormatter` 在 `format()` 末尾调用，`msg`、格式化参数和异常栈一起覆盖（挂在 Formatter 而不是 Filter 上，就是为了拦住 `logger.exception` 的 traceback）。
+- 反馈：`save_feedback` 在写 `feedback.sqlite` 前处理 `question` / `answer` / `reason`。
+- 只作用于存储与日志，**不改**送模型的输入和返回给用户的回答——否则“订单 AB****78 到哪了”这类问题无法处理。
+- `checkpoints.sqlite` 目前仍保存完整消息，尚未接入脱敏；它需要包一层 `SqliteSaver` 的序列化，成本高于前两处。
+- 已知边界：没有关键词前缀的自由文本地址、图片/PDF 内文字不覆盖；上游 `content[:200]` 截断可能把号码切成不足 11 位而漏判。
+- 规则幂等，重复处理不会二次破坏；内部异常时返回原文，不阻断日志或反馈写入。
+
 ## 知识库构建与恢复
 
 启动时按文件内容哈希、切分和 embedding 配置决定直接加载、增量更新或全量重建。

@@ -3,6 +3,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from utils.path_tool import get_abs_path
+from utils.redact import redact
 
 
 def save_feedback(user_id, thread_id, answer_id, question, answer, rating, reason, sources, kb_version, db_path=None):
@@ -13,7 +14,12 @@ def save_feedback(user_id, thread_id, answer_id, question, answer, rating, reaso
     with sqlite3.connect(db_path or get_abs_path("feedback.sqlite")) as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, user_id TEXT, thread_id TEXT, payload TEXT, updated TEXT)")
         key = hashlib.sha256(f"{user_id}:{thread_id}:{answer_id}".encode()).hexdigest()
-        payload = json.dumps(dict(question=question, answer=answer, rating=rating, reason=reason,
+        # 反馈里存的是用户原话，手机号 / 地址 / 订单号的出现频率远高于日志。
+        # 脱敏只在**入库前**做：界面上的对话历史、被点赞的那条回答仍是原文，
+        # 不受影响；拿到反馈数据的运营侧看到的是掩码版本。
+        # reason 也一起处理 —— 用户常在里面写"打我电话 138…"。
+        payload = json.dumps(dict(question=redact(question), answer=redact(answer),
+                                  rating=rating, reason=redact(reason),
                                   sources=sources, kb_version=kb_version), ensure_ascii=False)
         conn.execute("INSERT OR REPLACE INTO feedback VALUES (?, ?, ?, ?, ?)",
                      (key, user_id, thread_id, payload, datetime.now(timezone.utc).isoformat()))
