@@ -1,0 +1,151 @@
+{
+  "models": {
+    "chat": "qwen3.7-flash",
+    "embedding": "qwen3.7-text-embedding-flash",
+    "rerank": "qwen3-vl-rerank"
+  },
+  "index_count": 330,
+  "prewarmed_clients": true,
+  "persistent_history": false,
+  "cases": [
+    {
+      "question": "你好，请用一句话介绍你能帮我做什么。",
+      "phases": [
+        {
+          "label": "等待当前会话可用",
+          "at_s": 0.015
+        },
+        {
+          "label": "生成答复",
+          "at_s": 0.031
+        },
+        {
+          "label": "核对答复与资料",
+          "at_s": 3.984
+        }
+      ],
+      "tools": [],
+      "sources": [],
+      "status": "ok",
+      "total_s": 3.984,
+      "first_content_s": 3.453,
+      "final_segment_first_content_s": 3.453,
+      "answer": "我是您的专属扫地/扫拖机器人智能客服，可以为您提供涵盖产品选购、故障排查、维护保养及耗材推荐的专业指导，并能根据您所在城市的实时天气协助您判断是否适合开启拖地功能。",
+      "source_count": 0,
+      "references_valid": true,
+      "citation_check_applies": false
+    },
+    {
+      "question": "根据知识库，HEPA滤网多久更换一次？",
+      "phases": [
+        {
+          "label": "等待当前会话可用",
+          "at_s": 0.0
+        },
+        {
+          "label": "生成答复",
+          "at_s": 0.015
+        },
+        {
+          "label": "检索资料",
+          "at_s": 2.187
+        },
+        {
+          "label": "重排检索资料",
+          "at_s": 2.437
+        },
+        {
+          "label": "整理检索结果",
+          "at_s": 3.125
+        },
+        {
+          "label": "根据原文生成并核对答复",
+          "at_s": 3.125
+        }
+      ],
+      "tools": [
+        {
+          "name": "rag_summarize",
+          "args": {
+            "query": "HEPA滤网更换周期"
+          },
+          "at_s": 2.187
+        }
+      ],
+      "sources": [
+        {
+          "file": "扫地机器人100问.pdf",
+          "distance": 0.5812,
+          "snippet": "- 选择带专用地毯增压模式的机型。\n\n\n\n65. **滤网应该多久更换？**\n- HEPA 滤网 3-6 个月，海绵滤网可水洗但需定期更换。\n\n66. **边刷寿命一般是多久？**\n- 约 6-12 个月，视使用频率而定。\n\n67. **主刷需要更换吗？**\n- 胶刷 1-2 年，毛刷 6-12 个月检查磨损情况。\n\n68. **拖布有哪些类型？**\n- 一次性、可水洗、抗菌材质等多种选择。",
+          "chunk_id": "3b5fbe5f5186586db126a220c55e32ccacd4fc513c76c30f801de4577139d66c",
+          "page": 5,
+          "ref": 1,
+          "kb_version": "legacy"
+        },
+        {
+          "file": "扫地机器人100问.pdf",
+          "distance": 0.6525,
+          "snippet": "29. **尘盒应该多久清理一次？**\n- 每次使用后清理最佳，至少每 2-3 次清扫清理一次。\n\n30. **HEPA 滤网需要更换吗？**\n- 建议每 3-6 个月更换，水洗会降低过滤效果。\n\n31. **边刷需要更换吗？**\n- 每 6-12 个月检查磨损情况，变形严重时需要更换。\n\n32. **如何清理传感器？**\n- 用干燥软布擦拭激光雷达窗口、悬崖传感器等。",
+          "chunk_id": "68b0662d3b446a4b925bef68ca5804bf8f457254a31e1b74ffca7178204a52b0",
+          "page": 2,
+          "ref": 2,
+          "kb_version": "legacy"
+        },
+        {
+          "file": "维护保养.txt",
+          "distance": 0.7796,
+          "snippet": "38. 拖布使用3-5次后，用高温蒸汽消毒一次，杀灭细菌、螨虫，尤其适合宠物/婴儿家庭。\n\n39. 每月检查自动抬升拖布机型的电机，运行时无异常发热，如有及时联系售后检测。\n\n40. 拖地模组的所有配件，拆卸清理后需晾干再安装，避免进水导致电机、电路损坏。\n\n\n\n1. HEPA滤网：每周用软毛刷轻刷表面灰尘，每1-2个月用清水冲洗（不可揉搓），阴凉处晾干，3-6个月更换新滤网。",
+          "chunk_id": "a191ba44664e7bf3c2e054fc6dda2ebd3585e111a3cb1d57e83528097c537f11",
+          "page": null,
+          "ref": 3,
+          "kb_version": "legacy"
+        }
+      ],
+      "status": "ok",
+      "total_s": 4.046,
+      "first_content_s": 3.781,
+      "final_segment_first_content_s": 3.781,
+      "answer": "根据知识库，HEPA滤网建议每3-6个月更换一次[1][2]。",
+      "source_count": 3,
+      "references_valid": true,
+      "citation_check_applies": true
+    },
+    {
+      "question": "今天天气怎么样？",
+      "phases": [
+        {
+          "label": "等待当前会话可用",
+          "at_s": 0.016
+        },
+        {
+          "label": "生成答复",
+          "at_s": 0.016
+        },
+        {
+          "label": "生成答复",
+          "at_s": 12.016
+        },
+        {
+          "label": "核对答复与资料",
+          "at_s": 12.656
+        }
+      ],
+      "tools": [
+        {
+          "name": "get_user_location",
+          "args": {},
+          "at_s": 12.0
+        }
+      ],
+      "sources": [],
+      "status": "ok",
+      "total_s": 12.656,
+      "first_content_s": 12.516,
+      "final_segment_first_content_s": 12.516,
+      "answer": "为了帮您查询天气，请告诉我您所在的城市。",
+      "source_count": 0,
+      "references_valid": true,
+      "citation_check_applies": false
+    }
+  ]
+}

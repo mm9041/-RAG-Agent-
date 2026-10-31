@@ -13,3 +13,20 @@ context_max_chars: 24000
 
 # 普通问答直接返回原文；报告仍走摘要。上线前需对照评估拒答与质量。
 rag_raw_documents: true
+
+# 工具选择和普通闲聊默认关闭思考，尽早进入检索或输出正文。
+# 使用不支持 enable_thinking 的模型，或需要对照思考模式时，可设为 false。
+decision_disable_thinking: true
+
+# 资料已就位（本轮有工具结果）后，生成答案的那次模型调用是否关闭思考。
+# 2026-10-30 实测：天气那轮第二次调用 14.5s、719 reasoning token，正文却只有 1~2 秒，
+# 界面上表现为「转圈很久 → 文字整块蹦出」。关掉后这段只花 1~2 秒。
+# 只影响「已经有资料、只需组织语言」的那次调用；首次决策由上面的开关控制。
+# 若发现答案组织质量下降，设为 false 即可回退。
+answer_disable_thinking: true
+
+# 天气查询（Tavily 实时搜索）
+# timeout 是单次搜索的等待上限。一轮问答总预算是 180s，这里不能给太大；
+# 15s 已覆盖正常网络，超时会返回「查询失败」让模型如实告知，而不是让用户干等。
+weather_timeout: 15
+weather_max_results: 5

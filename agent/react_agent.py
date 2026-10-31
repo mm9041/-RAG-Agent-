@@ -246,8 +246,15 @@ class ReactAgent:
         return index_lock(os.path.join(tempfile.gettempdir(), "robot-agent-turns", key + ".lock"), timeout)
 
     def stream_events(self, query: str, thread_id: str = DEFAULT_THREAD_ID, user_id=None, **kwargs):
+        self.require_owner(thread_id, user_id)
+        cancel_event = kwargs.get("cancel_event")
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        yield ("phase", "等待服务配置就绪")
         from utils.model_settings import configuration_guard, refresh_model_settings
         with configuration_guard():
+            if cancel_event is not None and cancel_event.is_set():
+                return
             refresh_model_settings()
             yield from self._stream_events_locked(query, thread_id, user_id, **kwargs)
 
@@ -288,29 +295,33 @@ class ReactAgent:
             context["refresh_chat_model"] = self._chat_model_name != model_conf["chat_model_name"]
             context.update(cancel_token=token, device_model=device_model, washable=washable, stream_response=True)
             try:
-                for mode, payload in self.agent.stream(
-                    {"messages": [HumanMessage(content=query, additional_kwargs={"request_id":request_id})]},
-                    config=self._config(thread_id), stream_mode=["messages", "updates", "custom"], context=context):
-                    if mode == "messages":
-                        chunk, meta = payload
-                        if is_user_visible_token(chunk, meta):
-                            text = _as_text(chunk.content)
-                            if text:
-                                yield ("content", text)
-                        continue
-                    if mode == "custom":
-                        if isinstance(payload, dict) and payload.get("answer_delta"):
-                            yield ("content", payload["answer_delta"])
-                        if isinstance(payload, dict) and payload.get("phase"):
-                            yield ("phase", payload["phase"])
-                        continue
-                    for event, data in self._parse_updates(payload):
-                        if event != "content":
-                            yield event, data
-                    for delta in (payload or {}).values():
-                        for message in (delta or {}).get("messages", []) or []:
-                            if isinstance(message, AIMessage) and not message.tool_calls:
-                                yield ("final", _as_text(message.content))
+                from utils.progress import progress_context
+                with progress_context(cancel_event=cancel_event, deadline=context["deadline"]) as progress:
+                    if progress.deadline is not None:
+                        context["deadline"] = progress.deadline
+                    for mode, payload in self.agent.stream(
+                        {"messages": [HumanMessage(content=query, additional_kwargs={"request_id":request_id})]},
+                        config=self._config(thread_id), stream_mode=["messages", "updates", "custom"], context=context):
+                        if mode == "messages":
+                            chunk, meta = payload
+                            if is_user_visible_token(chunk, meta):
+                                text = _as_text(chunk.content)
+                                if text:
+                                    yield ("content", text)
+                            continue
+                        if mode == "custom":
+                            if isinstance(payload, dict) and payload.get("answer_delta"):
+                                yield ("content", payload["answer_delta"])
+                            if isinstance(payload, dict) and payload.get("phase"):
+                                yield ("phase", payload["phase"])
+                            continue
+                        for event, data in self._parse_updates(payload):
+                            if event != "content":
+                                yield event, data
+                        for delta in (payload or {}).values():
+                            for message in (delta or {}).get("messages", []) or []:
+                                if isinstance(message, AIMessage) and not message.tool_calls:
+                                    yield ("final", _as_text(message.content))
             finally:
                 unregister(token)
 

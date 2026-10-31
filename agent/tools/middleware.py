@@ -77,6 +77,13 @@ def monitor_tool(
     logger.info(f"[tool monitor]执行工具：{tool_name}")
     logger.info(f"[tool monitor]传入参数：{request.tool_call['args']}")
 
+    phase({
+        RAG_TOOL_NAME: "正在查找相关资料",
+        "get_weather": "正在查询天气",
+        "get_user_location": "正在确认所在城市",
+        "get_user_id": "正在准备回复",
+    }.get(tool_name, "正在查询相关信息"))
+
     try:
         result = handler(request)
     except Exception as e:
@@ -204,9 +211,18 @@ def bound_model(request, handler):
     if count == maximum - 1:
         tools = []  # 最后一次模型调用只能生成最终答复。
     settings = dict(request.model_settings)
-    settings.update(timeout=max(0.1, min(remaining, 120)))
+    from utils.config_handler import model_conf
+    configured_timeout = float(model_conf.get("chat_request_timeout", 45))
+    settings.update(timeout=max(0.1, min(remaining, configured_timeout)))
+    # 首次工具选择与拿到资料后的答复分别配置，便于按模型能力回退。
+    # SDK 的 max_retries 在客户端工厂配置，不能作为模型请求正文发送。
+    has_tool_result = any(isinstance(m, ToolMessage) for m in request.messages[last_human:])
+    disable_thinking = agent_conf.get(
+        "answer_disable_thinking" if has_tool_result else "decision_disable_thinking", True)
+    if disable_thinking:
+        settings["extra_body"] = {**(settings.get("extra_body") or {}), "enable_thinking": False}
     started = time.monotonic()
-    phase("生成答复")
+    phase("正在生成回复" if has_tool_result else "正在理解问题")
     from model.factory import get_chat_model
     model = get_chat_model() if context.get("refresh_chat_model") else request.model
     response = handler(request.override(model=model, messages=messages, tools=tools, model_settings=settings))

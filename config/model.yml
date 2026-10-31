@@ -8,7 +8,7 @@
 # chat 模型**不在向量库参数指纹内** → 换它不需要重建向量库。
 # 但换 chat 模型必须重新验证三项"提示词契约"行为：
 #   ① 资料不覆盖时输出 [无覆盖]；② 检索为空时不换措辞重试；③ 报告流程的固定调用顺序。
-chat_model_name: "qwen3.7-flash"
+chat_model_name: "qwen3.8-max"
 # 2026-09-20 由 text-embedding-v4 换成 qwen3.7-text-embedding-flash：
 # text-embedding-v4 的**免费额度用尽**（Free quota exhausted），
 # 而 flash 版可用。换 embedding 模型会触发向量库全量重建（它参与参数指纹）——
@@ -26,7 +26,29 @@ embedding_model_name: "qwen3.7-text-embedding-flash"
 #
 # 另外，重试**必须分类**：额度用尽（Free quota exhausted）等几秒不会变好，
 # 重试纯属浪费时间，所以那种错误会立即抛出。分类逻辑见 utils/retry.py。
-request_timeout: 120      # 单次请求读超时（秒）。聊天可能要长回答，给宽松些；嵌入/检索远快于此
-max_retries: 3            # 可重试错误的退避重试次数（0 表示不重试）
+request_timeout: 120      # embedding 单次请求读超时（秒），保留建库等待预算
+max_retries: 3            # embedding 可重试错误的退避重试次数（0 表示不重试）
 retry_backoff: 2          # 退避基数（秒），实际间隔 = backoff * 2^i，即 2s / 4s / 8s
+
+# 交互聊天单独设置，避免沿用建库的长等待和重试次数。
+# SDK 重试不受回合边界检查控制，默认关闭；网络失败后由界面提供重试。
+# 修改这些请求设置后需要重启服务。核对调用还会应用其更短的超时。
+chat_request_timeout: 45
+chat_max_retries: 0
+
+# ---------------------------------------------------------------------------
+# 证据核对（agent/grounding.py）的生成预算与思考开关。
+#
+# 2026-10-30 实测 qwen3.7-flash（同一 prompt，多次调用）：
+#   开思考 + max_tokens=800    → 9.8s 抛 LengthFinishReasonError（reasoning 吃满预算）
+#   开思考 + max_tokens=1600   → 18.3s 仍抛
+#   开思考 + max_tokens=8000   → 能出正文，但 14.5s（简单）/ 18.2~24.4s（判断覆盖性，波动 6s）
+#   关思考 + max_tokens=800    → 0.9s 正常返回，判定结果与 8000 完全一致
+# 取舍：预算给到 8000 只是「绕过」，每轮多等十几秒且贴住 30s 超时线；
+# 关思考才是根上的解法。所以默认「关思考 + 8000 兜底」——预算用不满，
+# 只在关思考失效（换模型/端点忽略该参数）时兜住截断。
+#
+# 想复现「开思考」的效果：把 grounding_disable_thinking 设为 false 即可，代价见上。
+grounding_max_tokens: 8000
+grounding_disable_thinking: true
 

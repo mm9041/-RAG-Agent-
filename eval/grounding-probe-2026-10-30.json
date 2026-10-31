@@ -1,0 +1,107 @@
+{
+  "question": "根据知识库，HEPA滤网多久更换一次？",
+  "events": [
+    {
+      "event": "phase",
+      "data": "等待服务配置就绪",
+      "at_s": 0.0
+    },
+    {
+      "event": "phase",
+      "data": "等待当前会话可用",
+      "at_s": 0.016
+    },
+    {
+      "event": "phase",
+      "data": "正在理解问题",
+      "at_s": 0.172
+    },
+    {
+      "event": "tool_start",
+      "data": {
+        "name": "rag_summarize",
+        "args": {
+          "query": "HEPA滤网更换周期"
+        }
+      },
+      "at_s": 1.047
+    },
+    {
+      "event": "phase",
+      "data": "正在查找相关资料",
+      "at_s": 1.047
+    },
+    {
+      "event": "phase",
+      "data": "检索资料",
+      "at_s": 1.047
+    },
+    {
+      "event": "phase",
+      "data": "重排检索资料",
+      "at_s": 1.469
+    },
+    {
+      "event": "phase",
+      "data": "整理检索结果",
+      "at_s": 2.125
+    },
+    {
+      "event": "phase",
+      "data": "根据原文生成并核对答复",
+      "at_s": 2.125
+    },
+    {
+      "event": "content",
+      "data": "根据",
+      "at_s": 2.75
+    },
+    {
+      "event": "content",
+      "data": "知识库，HEPA",
+      "at_s": 2.75
+    },
+    {
+      "event": "content",
+      "data": "滤网建议每",
+      "at_s": 2.797
+    },
+    {
+      "event": "content",
+      "data": "3-6",
+      "at_s": 2.797
+    },
+    {
+      "event": "content",
+      "data": "个月更换一次[",
+      "at_s": 2.906
+    },
+    {
+      "event": "content",
+      "data": "1][2]",
+      "at_s": 2.906
+    },
+    {
+      "event": "content",
+      "data": "。",
+      "at_s": 2.953
+    },
+    {
+      "event": "final",
+      "data": "根据知识库，HEPA滤网建议每3-6个月更换一次[1][2]。",
+      "at_s": 3.031
+    }
+  ],
+  "diagnostics": [
+    {
+      "candidate_answer": "根据知识库，HEPA滤网建议每3-6个月更换一次[1][2]。",
+      "refs": [
+        1,
+        2,
+        3
+      ],
+      "valid": true
+    }
+  ],
+  "total_s": 3.031
+}

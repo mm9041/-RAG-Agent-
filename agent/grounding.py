@@ -16,8 +16,22 @@ def turn_sources(messages):
     return list(unique.values())
 
 
+def _citation_refs(answer):
+    """提取单号和分组引用；数字引用格式损坏时保守拒绝，不忽略未知分组。"""
+    refs = set()
+    for opening in re.finditer(r"\[(?=\s*[,，、+\-]*\s*[0-9])", answer):
+        end = answer.find("]", opening.end())
+        if end < 0 or (opening.start() > 0 and answer[opening.start() - 1] == "["):
+            return set()
+        label = answer[opening.end():end].strip(" \t")
+        if not re.fullmatch(r"[0-9]+(?:[ \t]*[,，、][ \t]*[0-9]+)*", label):
+            return set()
+        refs.update(re.findall(r"[0-9]+", label))
+    return refs
+
+
 def valid_citations(answer, sources):
-    refs = set(re.findall(r"\[(\d+)\]", answer))
+    refs = _citation_refs(answer)
     return bool(refs) and refs <= {str(s["ref"]) for s in sources} and "[资料:" not in answer
 
 
@@ -42,6 +56,33 @@ class GroundedAnswer(BaseModel):
     answer: str
 
 
+# 核对调用的固定参数。关于 max_tokens 的结论来自 2026-10-30 实测（qwen3.7-flash）：
+#   开思考：800 撑 9.8s 抛 LengthFinishReasonError，1600 撑 18.3s 再抛，
+#           8000 能出正文但要 14.5s（简单抽取）/ 18.2~24.4s（判断覆盖性，两次差 6s）；
+#   关思考：同一请求 0.9s 正常返回，判定结果与 8000 完全一致。
+# 所以「答案为空」不是预算不够，是流式调用默认开思考、reasoning 把预算吃光。
+# 预算调大能绕过，但要多等十几倍时间且贴住 30s 超时线；关思考才是根上的解法。
+# max_tokens 保留在 model.yml 里，作为关闭思考失效时的兜底上限。
+_VERIFY_MAX_TOKENS = 1200
+_VERIFY_TIMEOUT = 30
+# 这些异常属于「已知会失败」的预期降级，用 warning 记一行就够；
+# 打全栈会把 20 行 traceback 刷进生产日志，反而盖住真正的未知异常。
+_EXPECTED_FAILURES = {"LengthFinishReasonError", "APITimeoutError", "APIConnectionError", "TimeoutError"}
+
+
+def _verify_options() -> dict:
+    """核对模型的调用参数。关闭思考可通过 model.yml 的 grounding_disable_thinking 关掉
+    （换用不支持 enable_thinking 的模型时设 false，避免端点报未知参数）。"""
+    from utils.config_handler import model_conf
+    opts = {
+        "max_tokens": int(model_conf.get("grounding_max_tokens", _VERIFY_MAX_TOKENS)),
+        "timeout": _VERIFY_TIMEOUT,
+    }
+    if model_conf.get("grounding_disable_thinking", True):
+        opts["extra_body"] = {"enable_thinking": False}
+    return opts
+
+
 def validate_answer(draft, messages, context):
     sources = turn_sources(messages)
     start = max((i for i,m in enumerate(messages) if isinstance(m, HumanMessage)),default=0)
@@ -64,7 +105,8 @@ def validate_answer(draft, messages, context):
             from utils.progress import answer_delta
             from agent.control import cancelled
             partial, emitted = {}, ""
-            for update in get_chat_model().with_structured_output(GroundedAnswer.model_json_schema()).stream(prompt, config={"tags":["grounded_stream"]}, max_tokens=800, timeout=30):
+            for update in get_chat_model().with_structured_output(GroundedAnswer.model_json_schema()).stream(
+                    prompt, config={"tags":["grounded_stream"]}, **_verify_options()):
                 if cancelled(context.get("cancel_token")):
                     return "本次处理已停止。"
                 if isinstance(update, dict):
@@ -75,11 +117,15 @@ def validate_answer(draft, messages, context):
                         emitted = text
             result = GroundedAnswer.model_validate(partial)
         else:
-            result = get_chat_model().with_structured_output(GroundedAnswer).invoke(prompt, max_tokens=800, timeout=30)
+            result = get_chat_model().with_structured_output(GroundedAnswer).invoke(
+                prompt, **_verify_options())
         if not result.covered:
             return "当前知识库未覆盖这个问题，无法给出有依据的回答。可以补充产品说明书或联系人工客服核实。"
         return result.answer if (valid_citations(result.answer, sources) if sources else not re.search(r"\[\d+\]|\[资料:", result.answer)) else fallback
-    except Exception:
+    except Exception as e:
         from utils.logger_handler import logger
-        logger.exception("[grounding]核对失败，回退原文")
+        if type(e).__name__ in _EXPECTED_FAILURES:
+            logger.warning(f"[grounding]核对未完成（{type(e).__name__}），回退原文：{str(e)[:120]}")
+        else:
+            logger.exception("[grounding]核对失败，回退原文")
         return fallback

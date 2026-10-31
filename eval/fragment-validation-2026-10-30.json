@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "python": "D:\\anaconda3\\envs\\time\\python.exe",
+  "streamlit_version": "1.64.0",
+  "previous_tests": 232,
+  "new_fragment_tests": 6,
+  "final_tests": 238,
+  "unittest_seconds": 42.095,
+  "unittest_exit_code": 0,
+  "compiled_python_files": 59,
+  "source_manifest_files": 73,
+  "source_manifest_sha256": "159c71ed0777b31a695839005fad5854b0f36949513b97528592d6624b69e0ff",
+  "isolated_offline_tests": true,
+  "real_script_runner_late_tick_tests": true,
+  "browser_simulated_normal_rounds": 3,
+  "browser_simulated_cancel_rounds": 1,
+  "browser_answer_counts": [1, 1, 1],
+  "browser_input_restored": true,
+  "isolated_server_missing_fragment_log_count": 0,
+  "online_model_calls": 0,
+  "production_service_restarted": false
+}

@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "python": "D:\\anaconda3\\envs\\time\\python.exe",
+  "python_version": "3.10.20",
+  "baseline_tests": 194,
+  "final_tests": 232,
+  "new_tests": 38,
+  "unittest_seconds": 25.546,
+  "unittest_exit_code": 0,
+  "compiled_python_files": 58,
+  "source_manifest_files": 72,
+  "source_manifest_sha256": "77acce7ba8f662a2f180b678a640ff7fab81f8358d0099ebe61746d8c0b94bc2",
+  "isolated_test_copy": true,
+  "production_env_or_databases_copied_for_offline_tests": false,
+  "online_cases_per_primary_group": 3,
+  "additional_diagnostic_calls": 1,
+  "browser_checks": "isolated UI with simulated slow responses",
+  "commands": ["python -m unittest discover -s tests -q", "py_compile on all 58 copied Python files"]
+}

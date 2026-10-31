@@ -29,10 +29,10 @@ from utils.config_handler import model_conf
 from utils.retry import call_with_retry
 
 def _network_options() -> dict:
-    """超时与重试参数，统一从 model.yml 读（读不到就用安全默认值）"""
+    """聊天客户端使用独立等待预算；建库 embedding 保留自己的超时与重试。"""
     return {
-        "request_timeout": model_conf.get("request_timeout", 120),
-        "max_retries": model_conf.get("max_retries", 3),
+        "request_timeout": model_conf.get("chat_request_timeout", 45),
+        "max_retries": model_conf.get("chat_max_retries", 0),
     }
 
 

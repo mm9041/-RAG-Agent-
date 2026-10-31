@@ -118,7 +118,7 @@ rerank_enabled: true
 #   qwen3.7-text-rerank 正确 0.9364 / 次优 0.1797   → 间距 0.76（更陡，排序更果断）
 # 换重排模型不需要重建向量库（它只影响排序、不影响向量），改完即时生效。
 # 重排失败会自动降级为向量顺序，不会让检索整体失败（实测额度用尽时正是如此）。
-rerank_model: "qwen3-rerank"
+rerank_model: "qwen3-vl-rerank"
 rerank_fetch_k: 20
 
 # 重排请求的总超时（秒）。

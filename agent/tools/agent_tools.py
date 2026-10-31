@@ -214,23 +214,110 @@ def rag_summarize(query: str, runtime: ToolRuntime) -> tuple[str, dict]:
 
 # --------------------------------------------------------------------- 环境工具
 
+# get_user_location 没有定位能力，只能让模型去问用户。这个标记让模型和日志
+# 都能一眼认出「这一轮还没拿到城市」，也避免提示语被当成城市名传给 get_weather。
+LOCATION_NEEDED_MARKER = "[需要用户城市]"
+
+# 城市名只允许中文、拉丁字母、间隔号、连字符和空格。这条校验主要防模型把
+# get_user_location 返回的提示语、或「我 / 这里」这类代词直接当城市名传进来。
+_CITY_PATTERN = re.compile(r"^[\u4e00-\u9fa5A-Za-z·\-\s]{2,20}$")
+
+# 合法的中文双字词也可能是代词（「这里」「本地」都满足上面的字符规则），
+# 单独再拦一道；真实城市名不会包含这些词。
+_PLACEHOLDER_WORDS = ("这里", "那里", "本地", "附近", "当前", "我家",
+                      "这边", "那边", "未知", "不清楚", "模拟")
+
+
+def _get_tavily_client():
+    """返回 Tavily 客户端；没有配置 key 时返回 None。
+
+    每次调用新建实例：TavilyClient 只是 requests 的薄包装，构造成本可忽略，
+    比维护跨线程单例更简单。key 现读环境变量，改完 .env 不必重启进程。
+    """
+    from utils.env import ensure_env_loaded
+
+    ensure_env_loaded()
+    key = (os.getenv("TAVILY_API_KEY") or "").strip()
+    if not key:
+        return None
+
+    from tavily import TavilyClient
+
+    return TavilyClient(api_key=key)
+
+
 @tool(description=(
-    "获取指定城市的模拟天气与环境信息（非实时）（气温、湿度、风力、AQI、降雨概率），纯字符串返回。"
-    "入参 city 为标准城市名称。"
+    "查询指定城市的实时天气与环境信息（气温、湿度、风力、AQI、降雨概率），数据来自联网搜索。"
+    "入参 city 必须是用户明确说出的城市名（如「深圳」「杭州市」）。"
+    "不能是「我」「这里」「当前城市」等代词，也不能是 get_user_location 的返回值。"
     "使用场景：需要判断某城市环境是否适配扫地/扫拖机器人使用，"
-    "或用户问题涉及天气、湿度对机器人使用的影响时。"
-    "若需要知道用户当前所在城市，请先调用 get_user_location。"
+    "或用户问题涉及天气、湿度、空气质量对机器人使用的影响时。"
+    "如果用户还没说城市，先询问用户；用户回答后再调用本工具。"
 ))
 def get_weather(city: str) -> str:
-    return f"[模拟数据，非实时] 城市{city}天气为晴天，气温26摄氏度，空气湿度50%，南风1级，AQI21，最近6小时降雨概率极低"
+    city = (city or "").strip()
+
+    if not _CITY_PATTERN.match(city) or any(word in city for word in _PLACEHOLDER_WORDS):
+        return ("[天气查询失败]城市名无效。请先询问用户所在城市（只取城市名），"
+                "拿到后再调用 get_weather；不要猜测，也不要把提示语当城市名。")
+
+    client = _get_tavily_client()
+    if client is None:
+        logger.warning("[get_weather]未配置 TAVILY_API_KEY，天气查询不可用")
+        return ("[天气查询不可用]系统未配置联网搜索服务。"
+                "请如实告知用户暂时查不到天气，不要编造天气数据。")
+
+    try:
+        result = client.search(
+            query=f"{city} 今天天气 气温 湿度 空气质量",
+            search_depth="basic",
+            max_results=int(agent_conf.get("weather_max_results", 5)),
+            # 刻意关闭 include_answer：实测（2026-10-18）它会拿抓到的旧页面
+            # 重新表述成「今天」。当天源页面标注的是 10 Oct，answer 却写成
+            # October 18 —— 生成式复述把日期编错了。只给原始摘要，让模型
+            # 自己看到页面标注的更新时间，比一句"权威答案"安全。
+            include_answer=False,
+            timeout=float(agent_conf.get("weather_timeout", 15)),
+        )
+    except Exception as e:
+        # 工具不能抛异常：异常会打断 agent 循环，用户只会看到一句「出错了」。
+        logger.warning(f"[get_weather]Tavily 查询失败：{type(e).__name__}: {e}")
+        return ("[天气查询失败]联网搜索暂时不可用。"
+                "请告知用户稍后再试，不要编造天气数据。")
+
+    items = [item for item in (result.get("results") or []) if isinstance(item, dict)]
+    snippets = [str(item.get("content") or "").strip()[:300] for item in items[:3]]
+    snippets = [s for s in snippets if s]
+
+    if not snippets:
+        logger.info(f"[get_weather]Tavily 未返回 {city} 的天气内容")
+        return (f"[天气查询无结果]没有查到 {city} 的天气信息。"
+                "请告知用户没有查到，不要自行猜测。")
+
+    parts = [
+        f"[联网天气搜索结果·来源 Tavily·城市：{city}]",
+        "⚠️ 以下是网页摘要，可能滞后于当前时刻。回答时必须说明「信息来自网络搜索」"
+        "并提示可能不是最新，以摘要中标注的更新时间为准；不要把旧数据断言成当前实况。",
+        "网页摘要：\n" + "\n".join(f"- {s}" for s in snippets),
+    ]
+    urls = [str(item.get("url")) for item in items[:3] if item.get("url")]
+    if urls:
+        parts.append("来源链接：" + "；".join(urls))
+    return "\n".join(parts)
 
 
 @tool(description=(
-    "获取演示城市名称（模拟位置，不代表当前用户实际位置），纯字符串返回，无需入参。"
-    "使用场景：需要用户地理位置时，或需要为 get_weather 提供 city 参数时。"
+    "获取用户所在城市。**本系统没有定位能力，调用后不会返回城市名**，只会返回一条提示。"
+    "拿到提示后，必须在回答中直接询问用户所在城市，并等待用户回答；"
+    "不要把提示文本当作城市名传给 get_weather。"
+    "使用场景：用户问题涉及天气、湿度、空气质量对机器人使用的影响，"
+    "且用户尚未说明自己在哪个城市时。"
+    "如果用户已经在问题里说了城市，不要调用本工具，直接用该城市调用 get_weather。"
 ))
 def get_user_location() -> str:
-    return "深圳（模拟位置）"
+    return (f"{LOCATION_NEEDED_MARKER}系统无法自动获取位置。"
+            "请在回答中直接询问用户所在城市，不要猜测；"
+            "用户回答后，再用该城市调用 get_weather。")
 
 
 # ------------------------------------------------------- 身份与时间（会话注入）

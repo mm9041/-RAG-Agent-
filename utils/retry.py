@@ -23,6 +23,22 @@ DashScope 把限流报成 **400**（body 里写 `"type": "ServiceUnavailable"`�
 import time
 
 from utils.logger_handler import logger
+from utils.progress import current_progress_context, phase
+
+
+class RetryCancelled(InterruptedError):
+    """用户停止后不再发出下一次网络请求。"""
+
+
+class RetryDeadlineExceeded(TimeoutError):
+    """本轮预算用尽后停止退避和后续请求。"""
+
+
+def _check_budget(cancel_event, deadline):
+    if cancel_event is not None and cancel_event.is_set():
+        raise RetryCancelled("本次处理已停止。")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise RetryDeadlineExceeded("本轮处理时间已用尽，请稍后重试。")
 
 # 命中这些标记 -> 可重试（等一会儿可能就好）
 _TRANSIENT_MARKERS = (
@@ -67,15 +83,22 @@ def is_retryable(error: BaseException) -> bool:
     return False
 
 
-def call_with_retry(callable_, *, what: str, retries: int = 3, backoff: float = 2.0):
+def call_with_retry(callable_, *, what: str, retries: int = 3, backoff: float = 2.0,
+                    cancel_event=None, deadline=None):
     """执行 callable_，遇到**可重试**的错误就指数退避重试。
 
     退避间隔 = backoff * 2^i（默认 2s / 4s / 8s）。
     不可重试的错误**立即抛出**，不做无谓等待。
     """
+    current = current_progress_context()
+    if current is not None:
+        cancel_event = current.cancel_event if cancel_event is None else cancel_event
+        if current.deadline is not None:
+            deadline = current.deadline if deadline is None else min(deadline, current.deadline)
     last_error: BaseException | None = None
 
     for attempt in range(retries + 1):
+        _check_budget(cancel_event, deadline)
         try:
             return callable_()
         except Exception as error:          # noqa: BLE001 —— 分类交给 is_retryable
@@ -84,12 +107,24 @@ def call_with_retry(callable_, *, what: str, retries: int = 3, backoff: float = 
             if attempt >= retries or not is_retryable(error):
                 raise
 
-            wait = backoff * (2 ** attempt)
+            _check_budget(cancel_event, deadline)
+            wait = max(0.0, backoff * (2 ** attempt))
             logger.warning(
                 f"[重试]{what} 第 {attempt + 1}/{retries} 次失败"
                 f"（{type(error).__name__}: {str(error)[:120]}），"
                 f"{wait:.0f}s 后重试"
             )
-            time.sleep(wait)
+            if wait:
+                # UI 不显示原始异常、请求文本或凭据，只解释为什么仍在等待。
+                phase(f"服务暂时繁忙，{wait:g} 秒后自动重试（第 {attempt + 1}/{retries} 次）")
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            pause = wait if remaining is None else min(wait, remaining)
+            if cancel_event is not None:
+                cancel_event.wait(pause)
+            else:
+                time.sleep(pause)
+            _check_budget(cancel_event, deadline)
+            if wait:
+                phase("正在重新连接服务")
 
     raise last_error      # 理论上到不了这里
