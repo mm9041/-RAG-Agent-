@@ -187,7 +187,11 @@ class ReactAgent:
         self.agent = create_agent(
             model=get_chat_model(),
             system_prompt=load_system_prompts(),
-            tools=[rag_summarize, get_weather, get_user_location, get_user_id],
+            # get_current_month 是报告流程的必要依赖：fetch_external_data 的工具描述
+            # 明确要求"先通过 get_user_id 和 get_current_month 取得入参"，
+            # 缺了它模型只能猜月份或反问用户。不需要时删掉这一项即可。
+            tools=[rag_summarize, get_weather, get_user_location, get_user_id,
+                   get_current_month, fetch_external_data, enter_report_mode],
             middleware=[monitor_tool, log_before_model, report_prompt_addendum, bound_model],
             checkpointer=self.checkpointer,
             # 声明上下文 schema：key 拼错能被类型检查发现，也避免 LangChain
@@ -409,6 +413,35 @@ class ReactAgent:
                 "rounds": sum(isinstance(m, HumanMessage) for m in messages),
                 "updated": str(snapshot.checkpoint.get("ts", ""))})
         return records
+
+    def truncate_last_turn(self, thread_id: str, user_id: str) -> int:
+        """删除最后一轮（最后一条 HumanMessage 及其后的全部消息），返回删除条数。
+
+        给"重新生成"用：直接把问题重发一遍会让历史里出现两条一样的提问，
+        所以先把上一轮从检查点里摘掉。``RemoveMessage`` 是 LangGraph 官方支持
+        的删除语义，作用在 messages 通道的 add_messages reducer 上。
+
+        没有可删的内容时返回 0，不抛异常——前端重复点击是常见情况。
+        """
+        self.require_owner(thread_id, user_id)
+        from langchain_core.messages import RemoveMessage
+
+        with self._turn_lock(thread_id):
+            state = self.agent.get_state(self._config(thread_id))
+            messages = list((state.values or {}).get("messages", []))
+            start = next((i for i in range(len(messages) - 1, -1, -1)
+                          if isinstance(messages[i], HumanMessage)), None)
+            if start is None:
+                return 0
+            ids = [m.id for m in messages[start:] if getattr(m, "id", None)]
+            if not ids:
+                return 0
+            self.agent.update_state(
+                self._config(thread_id),
+                {"messages": [RemoveMessage(id=message_id) for message_id in ids]},
+            )
+        logger.info(f"[Agent]已回退上一轮（{len(ids)} 条消息）：{thread_id}")
+        return len(ids)
 
     def delete_thread(self, thread_id: str, user_id: str) -> None:
         self.require_owner(thread_id, user_id)

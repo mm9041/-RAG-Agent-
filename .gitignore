@@ -43,6 +43,11 @@ env/
 feedback.sqlite*
 kb_versions/
 
+# 知识库发布的运行时状态：由 utils/knowledge_admin 写入，
+# 每台机器上的 model/scope/version 可能不同，且含文件锁
+data/.catalog.json
+data/.edit.lock
+
 admin_sessions.sqlite*
 
 .config_guard.sqlite*

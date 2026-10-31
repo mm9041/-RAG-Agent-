@@ -203,5 +203,26 @@ python -m eval.agent_eval --mode raw --output eval/agent-raw.json
 - `config/chroma.yml`：知识库、切分、重排与检索参数。
 - `config/agent.yml`：Agent 预算、原文/摘要路径开关。
 - `config/prompts.yml`：提示词文件路径。
+
+### 角色模型（可选的提速手段）
+
+一次带检索的问答只有两次模型调用：**首次工具决策** → **证据核对与受约束生成**（有资料时 `bound_model` 会短路掉草稿生成）。`config/model.yml` 允许把前者交给更快的模型：
+
+```yaml
+decision_model_name: "qwen3.7-flash"   # 首次工具选择
+grounding_model_name: ""               # 留空 = 跟随 chat_model_name
+```
+
+2026-10-31 实测（`tools/bench.py`，数据在 `eval/bench-*.json`）：
+
+| 配置 | 闲聊首字 | HEPA 首字 | 吸力首字 |
+|---|---:|---:|---:|
+| 全量 `qwen3.8-max` | 1.61s | 0.83s | 1.23s |
+| decision 换 flash | **0.77s** | **0.50s** | **0.66s** |
+
+`decision` 换小模型约快 40–50%，三次都正确触发了检索。**`grounding` 不建议换**：同一问题输出从 195 字涨到 1342 字，"200 字内"的约束被无视，反而更慢。
+
+两个键留空即恢复改动前行为。测试会忽略这两个配置（见 `tests/__init__.py`），避免假模型注入失效。
+
 - SQLite 备份应使用 SQLite backup API，不能在运行期间只复制主文件而忽略 WAL。
 - 上游 LangChain/Pydantic 序列化警告仍可能出现；升级依赖后应重跑测试。

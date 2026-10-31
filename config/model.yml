@@ -8,7 +8,39 @@
 # chat 模型**不在向量库参数指纹内** → 换它不需要重建向量库。
 # 但换 chat 模型必须重新验证三项"提示词契约"行为：
 #   ① 资料不覆盖时输出 [无覆盖]；② 检索为空时不换措辞重试；③ 报告流程的固定调用顺序。
-chat_model_name: "qwen3.8-max"
+# 2026-10-31 由 qwen3.8-max 换成 deepseek-v4.1-flash-1017。
+# 同组三题实测（eval/bench-before.json vs bench-deepseek2.json）：
+#   final  2.00 / 5.19 / 6.20s  →  1.08 / 2.72 / 2.50s
+#   首字   1.61 / 0.83 / 1.23s  →  0.91 / 0.50 / 0.66s
+#   回答质量相当，HEPA 那题还主动指出了两份资料的水洗说法冲突。
+#
+# 换它有两个前提，都已在代码里落实：
+#   ① grounding 的结构化输出必须走 function_calling —— deepseek 不支持
+#      response_format 的 json_schema，会报 "This response_format type is
+#      unavailable now"，见 agent/grounding.py 的 _STRUCTURED_METHOD；
+#   ② prompts/main_prompt.txt 必须有"回复长度"一节 —— 否则闲聊会写 300+ 字。
+chat_model_name: "deepseek-v4.1-flash-1017"
+
+# 可选：把"难度低于自由写作"的调用交给更快的模型。
+# 留空 = 跟随 chat_model_name，行为与之前完全一致。
+#
+#   decision_model_name   首次工具选择（路由判断）
+#   grounding_model_name  证据核对与受约束生成
+#
+# 2026-10-31 实测（tools/bench.py，数据在 eval/bench-*.json）：
+#   decision 换 flash —— 采用，首字明显下降：
+#     全量 qwen3.8-max      1.61 / 0.83 / 1.23（闲聊 / HEPA / 吸力）
+#     decision=qwen3.7-flash 0.77 / 0.50 / 0.66
+#     decision=qwen3.8-flash 0.91 / 0.91 / 0.66
+#   3.8-flash 与 3.7-flash 基本持平（HEPA 那题在噪声范围内略慢），三次都正确触发检索。
+#   ⚠️ 注意作用范围：首次调用一律走这个模型，**包括不需要工具的闲聊**。
+#     如果发现复杂但无需检索的问题答得不如之前，把它改回空即可。
+#   grounding 换 flash —— 不采用。同一问题输出从 195 字涨到 1342 字，
+#     "普通问答控制在 200 字内"的约束被无视，final 反而从 6.2s 变成 11.89s。
+#     这类调用需要遵守长度与引用约束，必须用主模型。
+decision_model_name: "deepseek-v4.1-flash-1017"
+grounding_model_name: ""
+
 # 2026-09-20 由 text-embedding-v4 换成 qwen3.7-text-embedding-flash：
 # text-embedding-v4 的**免费额度用尽**（Free quota exhausted），
 # 而 flash 版可用。换 embedding 模型会触发向量库全量重建（它参与参数指纹）——

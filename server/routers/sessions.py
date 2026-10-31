@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from agent.react_agent import ReactAgent
 from server import runtime
@@ -41,18 +41,51 @@ def new_session(user_id: str = Depends(current_user)):
 
 
 @router.get("/{thread_id}/history")
-async def history(thread_id: str, user_id: str = Depends(current_user)):
+async def history(
+    thread_id: str,
+    user_id: str = Depends(current_user),
+    limit: int = Query(default=60, ge=1, le=200),
+    before: int | None = Query(default=None, ge=0),
+):
+    """读取会话历史，支持向上翻页。
+
+    只返回最近 ``limit`` 条；``before`` 传上一页的 ``start`` 即可拿到更早的一段。
+    ``start`` 必须一并返回：点赞的 answer_id 依赖消息在**完整历史**里的下标，
+    前端不能用页内下标，否则翻页后点赞会写到别的消息上。
+    """
     agent = _agent()
     try:
         messages = await asyncio.to_thread(agent.load_history, thread_id, user_id)
-        # 点赞状态一次性带回，避免前端为每条消息再发一个请求
-        states = await asyncio.to_thread(liked_states, user_id, thread_id, messages)
     except PermissionError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    for index, message in enumerate(messages):
-        if index < len(states):
-            message["liked"] = states[index]
-    return {"thread_id": thread_id, "messages": messages}
+
+    total = len(messages)
+    end = total if before is None else min(before, total)
+    start = max(0, end - limit)
+    page = messages[start:end]
+
+    states = await asyncio.to_thread(liked_states, user_id, thread_id, messages, start, end)
+    for offset, message in enumerate(page):
+        message["liked"] = states.get(start + offset, False)
+
+    return {
+        "thread_id": thread_id,
+        "messages": page,
+        "start": start,
+        "total": total,
+        "has_more": start > 0,
+    }
+
+
+@router.post("/{thread_id}/truncate")
+async def truncate(thread_id: str, user_id: str = Depends(current_user)):
+    """回退最后一轮，供前端"重新生成"使用。"""
+    agent = _agent()
+    try:
+        removed = await asyncio.to_thread(agent.truncate_last_turn, thread_id, user_id)
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return {"ok": True, "removed": removed}
 
 
 @router.delete("/{thread_id}")

@@ -241,5 +241,9 @@ class ProviderAndUiTests(unittest.TestCase):
             self.assertEqual(result["messages"][-1].content, "provider reply")
             self.assertNotIn("timeout", seen[0])
             schema = next(t["function"] for t in seen[0]["tools"] if t["function"]["name"] == "get_user_id")
-            self.assertEqual(set(schema["parameters"]["properties"]), set())
-            self.assertNotIn("fetch_external_data", [t["function"]["name"] for t in seen[0]["tools"]])
+            self.assertEqual(set(schema["parameters"]["properties"]), set(), "身份由系统注入，模型不应能传参")
+            # 工具快照：2026-10-31 启用了报告链路（含 get_current_month 这一前置依赖）
+            self.assertEqual({t["function"]["name"] for t in seen[0]["tools"]}, {
+                "rag_summarize", "get_weather", "get_user_location", "get_user_id",
+                "get_current_month", "fetch_external_data", "enter_report_mode",
+            })

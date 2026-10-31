@@ -35,22 +35,25 @@ def _kb_version() -> str:
         return "unknown"
 
 
-def liked_states(user_id: str, thread_id: str, messages: list[dict]) -> list[bool]:
-    """为一条历史的每条助手消息算已点赞状态，供 history 接口一次性带回。
+def liked_states(user_id: str, thread_id: str, messages: list[dict],
+                 start: int = 0, end: int | None = None) -> dict[int, bool]:
+    """返回 ``{全量下标: 是否已点赞}``。
 
-    逐条查 sqlite 在几十条消息的量级上仍然很快；比起让前端发 N 个请求，
-    少一轮往返更重要。
+    分页时只算 ``[start, end)`` 区间，但下标始终按**完整历史**计——
+    点赞 key 里含下标，用页内下标会导致翻页后点赞错位。
     """
-    states: list[bool] = []
-    for index, message in enumerate(messages):
+    stop = len(messages) if end is None else min(end, len(messages))
+    states: dict[int, bool] = {}
+    for index in range(start, stop):
+        message = messages[index]
         if message.get("role") != "assistant" or message.get("incomplete"):
-            states.append(False)
+            states[index] = False
             continue
         key = answer_key(thread_id, index, message.get("content", ""))
         try:
-            states.append(bool(is_liked(user_id, thread_id, key)))
+            states[index] = bool(is_liked(user_id, thread_id, key))
         except Exception:  # noqa: BLE001 - 反馈库损坏不该让历史读不出来
-            states.append(False)
+            states[index] = False
     return states
 
 

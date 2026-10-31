@@ -87,6 +87,9 @@ class RagSummarizeService(object):
 
         context = ""
         sources: list[RagSource] = []
+        # 读一次即可：_load_meta() 每次都真的打开并解析 kb_meta.json，
+        # 放在循环里会随 k 线性放大磁盘 IO。
+        kb_version = self.vector_store._load_meta().get("active_collection", "legacy")
         for index, (doc, score) in enumerate(outcome.hits, start=1):
             chunk_id = str(doc.metadata.get("chunk_id") or hashlib.sha256(
                 (str(doc.metadata) + doc.page_content).encode("utf-8")).hexdigest())
@@ -97,7 +100,7 @@ class RagSummarizeService(object):
                 distance=round(float(score), 4),
                 snippet=doc.page_content, chunk_id=chunk_id,
                 page=doc.metadata.get("page"), ref=ref_start + index - 1,
-                kb_version=self.vector_store._load_meta().get("active_collection", "legacy"),
+                kb_version=kb_version,
             ))
 
         phase("整理检索结果" if raw else "生成资料摘要")

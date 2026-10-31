@@ -137,3 +137,48 @@ git checkout <commit> -- app.py utils/service_ui.py utils/jobs.py utils/app_reso
 - 管理端：401 拦截、登录、概览/文件/反馈三页渲染正常
 - 路径穿越与越权接口均已封堵
 - 删除 Streamlit 前端后：215 项离线测试连续三次通过，服务启动与问答链路正常
+
+## 2026-10-31 追加改动
+
+清理 Streamlit 之后又补了一轮，每项都先量了数据再改。
+
+### 引用校验：区分"没引用"和"引错编号"
+
+`valid_citations` 原先要求回答里必须出现 `[数字]`，否则回退成原文堆叠。后果是：一个内容正确、只是没标引用的回答，会被替换成一大段原文，可读性反而更差。现在拆成两件事：
+
+- 引用了不存在的编号、或引用格式损坏 → 仍然回退（这是幻觉风险，必须拦）
+- 完全没有写引用 → 保留答案，只是前端不显示引用徽章
+
+实现是新增 `has_invalid_citations()`，`valid_citations()` 保留给旧调用方。
+
+### 角色模型分离
+
+`config/model.yml` 新增 `decision_model_name` / `grounding_model_name`，留空即跟随主模型。实测：
+
+| 配置 | 闲聊首字 | HEPA 首字 | 吸力首字 |
+|---|---:|---:|---:|
+| 全量 `qwen3.8-max` | 1.61s | 0.83s | 1.23s |
+| decision 换 flash | 0.77s | 0.50s | 0.66s |
+| grounding 也换 flash | 0.84s | 2.52s | 1.88s |
+
+decision 换小模型稳定快 40–50% 且三次都正确触发检索，采用；grounding 换 flash 会让同一问题从 195 字膨胀到 1342 字、"200 字内"的约束失效，final 反而更慢，不采用。
+
+### 长会话分页
+
+`GET /api/sessions/{id}/history` 新增 `limit` / `before`，返回 `start` / `total` / `has_more`。前端只渲染最近 60 条，向上滚动加载更早的并补偿 `scrollTop`。
+
+**`start` 不是可选项**：点赞的 `answer_id` 里含消息在**完整历史**中的下标，用页内下标会让翻页后的点赞写到别的消息上。
+
+### 前端新增交互
+
+- 历史向上翻页
+- 重新生成：后端 `POST /api/sessions/{id}/truncate` 用 `RemoveMessage` 把上一轮（提问 + 回答）真正从检查点删掉，再重发同一个问题；否则历史里会留下重复提问
+- 复制回答
+- 正文里的 `[n]` 可点击，展开引用面板并定位高亮对应片段
+- `StageBar` 的 `stopping` 从硬编码改为真实停止状态
+
+### 测试
+
+218 项（新增 `test_truncate_last_turn_removes_question_and_answer` 与 `tests/test_role_models.py`）。
+
+`tests/__init__.py` 会清空角色模型配置：否则生产配置里一旦配了 `decision_model_name`，测试中的 `patch('...get_chat_model')` 就被绕过，代码会去构造真实客户端，导致 6 个用例失败。

@@ -52,10 +52,14 @@ class ConversationTests(unittest.TestCase):
         list(self.agent.stream_events('A','user-1001','1001',cancel_event=cancel))
         self.assertEqual(self.agent.load_history('user-1001','1001'),[])
 
-    def test_unknown_filter_clarifies_without_model(self):
+    def test_unknown_filter_no_longer_uses_hardcoded_reply(self):
+        """话术已停用：知识库把 HEPA 口径统一成"按型号分条件"后，
+        这类问题应交给模型按检索资料回答，不再被预置文案拦截。
+        （原断言为 assertIn('是否标注') + 不走模型，对应已移除的 wash_clarification 短路。）
+        """
         result=self.agent.answer('HEPA滤网怎么清理？','user-1001','1001')
-        self.assertIn('是否标注',result)
-        self.assertNotIn('reply:',result)
+        self.assertNotIn('是否标注',result)
+        self.assertIn('reply:',result)
 
     def test_interrupted_tool_call_can_continue(self):
         self.agent.agent.update_state(self.agent._config('user-1001'),{'messages':[
@@ -155,6 +159,25 @@ class StopAndLockTests(unittest.TestCase):
             events=list(agent.stream_events('hi','user-1001','1001',cancel_event=cancel))
             self.assertEqual(events,[])
             self.assertEqual(agent.load_history('user-1001','1001'),[])
+
+    def test_truncate_last_turn_removes_question_and_answer(self):
+        """重新生成的前置条件：回退必须把提问也一起摘掉，否则历史里会出现重复问题。"""
+        with sqlite3.connect(':memory:',check_same_thread=False) as conn,patch('agent.react_agent.get_chat_model',return_value=PlainModel()):
+            agent=ReactAgent(SqliteSaver(conn))
+            agent.answer('first','user-1001','1001')
+            agent.answer('second','user-1001','1001')
+            self.assertEqual(len(agent.load_history('user-1001','1001')),4)
+
+            removed=agent.truncate_last_turn('user-1001','1001')
+            self.assertGreater(removed,0)
+            history=agent.load_history('user-1001','1001')
+            self.assertEqual(len(history),2)
+            self.assertEqual(history[0]['content'],'first')
+
+            agent.truncate_last_turn('user-1001','1001')
+            self.assertEqual(agent.load_history('user-1001','1001'),[])
+            # 没有可回退的内容时应当返回 0，而不是抛异常
+            self.assertEqual(agent.truncate_last_turn('user-1001','1001'),0)
 
     def test_file_checkpointers_share_lock_namespace(self):
         with tempfile.TemporaryDirectory() as tmp:

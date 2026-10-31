@@ -182,12 +182,18 @@ def bound_model(request, handler):
     context = request.runtime.context
     if context is None:
         return stop_response("缺少运行上下文，无法执行本次请求。")
-    from agent.grounding import wash_clarification, validate_answer, turn_sources
+    from agent.grounding import validate_answer, turn_sources
     if cancelled(context.get("cancel_token")):
         return stop_response("本次处理已停止。")
-    clarification = wash_clarification(request.messages, context)
-    if clarification:
-        return stop_response(clarification)
+    # 2026-10-31 停用 HEPA 水洗预置话术。
+    # 原因：知识库里三种口径互相打架（"可每月清水冲洗" / "水洗降低过滤效果" /
+    # "海绵滤网可水洗"混写），只能靠话术兜底。现已把 data/ 下的表述统一成
+    # "按型号分条件"，检索原文自洽后由模型照着资料回答，不再硬编码结论。
+    # 回退：取消下面三行注释即可（wash_clarification 仍保留在 grounding.py，
+    # 对应单测 test_customer_features 也还在跑）。
+    # clarification = wash_clarification(request.messages, context)
+    # if clarification:
+    #     return stop_response(clarification)
     remaining = context.get("deadline", float("inf")) - time.monotonic()
     count = context.get("model_call_total", 0)
     maximum = int(agent_conf.get("max_model_calls", 12))
@@ -198,7 +204,10 @@ def bound_model(request, handler):
         return stop_response("本轮内容过长，无法在上下文预算内处理，请缩小问题范围。")
     context["model_call_total"] = count + 1
     last_human = max((i for i,m in enumerate(request.messages) if isinstance(m, HumanMessage)), default=0)
-    has_records = any(isinstance(m, ToolMessage) and m.name == "fetch_external_data" and m.content for m in request.messages[last_human:])
+    has_records = any(isinstance(m, ToolMessage) and m.name == "fetch_external_data" and m.content
+                      for m in request.messages[last_human:])
+    # 普通问答：有检索原文就直接走受约束生成（不再让主模型写草稿）；
+    # 报告模式：只有真的查到了使用记录才短路，否则仍交给主模型组织报告。
     if (turn_sources(request.messages) and not context.get("report")) or (context.get("report") and has_records):
         phase("根据原文生成并核对答复")
         answer = validate_answer("", request.messages, context)
@@ -224,7 +233,15 @@ def bound_model(request, handler):
     started = time.monotonic()
     phase("正在生成回复" if has_tool_result else "正在理解问题")
     from model.factory import get_chat_model
-    model = get_chat_model() if context.get("refresh_chat_model") else request.model
+    if context.get("refresh_chat_model"):
+        model = get_chat_model()
+    elif not has_tool_result and model_conf.get("decision_model_name"):
+        # 首次调用只是工具路由判断，可以用更快的 decision 模型。
+        # 未配置 decision_model_name 时仍走 request.model，行为与之前完全一致。
+        from model.factory import get_decision_model
+        model = get_decision_model()
+    else:
+        model = request.model
     response = handler(request.override(model=model, messages=messages, tools=tools, model_settings=settings))
     logger.info("[model] elapsed=%.3fs calls=%s usage=%s", time.monotonic()-started,
                 count+1, [getattr(m, "usage_metadata", None) for m in response.result])

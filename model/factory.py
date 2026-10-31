@@ -44,12 +44,17 @@ class BaseModelFactory(ABC):
 
 class ChatModelFactory(BaseModelFactory):
     def generator(self) -> Optional[Embeddings | BaseChatModel]:
-        return init_chat_model(
-            model="openai:" + model_conf["chat_model_name"],
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
-            base_url=os.getenv("DASHSCOPE_BASE_URL"),
-            **_network_options(),
-        )
+        return _build_chat_model(model_conf["chat_model_name"])
+
+
+def _build_chat_model(name: str) -> BaseChatModel:
+    """按模型名构造聊天客户端。角色模型与默认模型共用同一套网络参数。"""
+    return init_chat_model(
+        model="openai:" + name,
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        base_url=os.getenv("DASHSCOPE_BASE_URL"),
+        **_network_options(),
+    )
 
 
 class EmbeddingsFactory(BaseModelFactory):
@@ -115,23 +120,62 @@ _MODEL_LOCK = threading.RLock()
 _chat_name = None
 _embed_name = None
 
+# 角色模型缓存：decision（首次工具决策）、grounding（证据核对）等。
+# 按角色各自缓存，因为不同角色允许用不同模型；配置变更时 reset_models 一并清空。
+_role_models: dict[str, BaseChatModel] = {}
+_role_names: dict[str, str] = {}
+
 
 def reset_models():
-    global _chat_model,_embed_model,_chat_name,_embed_name
+    global _chat_model, _embed_model, _chat_name, _embed_name
     with _MODEL_LOCK:
-        _chat_model=_embed_model=None
-        _chat_name=_embed_name=None
+        _chat_model = _embed_model = None
+        _chat_name = _embed_name = None
+        _role_models.clear()
+        _role_names.clear()
 
 
 def get_chat_model() -> BaseChatModel:
-    global _chat_model,_chat_name
+    global _chat_model, _chat_name
     with _MODEL_LOCK:
-        name=model_conf['chat_model_name']
-        if _chat_model is None or _chat_name!=name:
+        name = model_conf['chat_model_name']
+        if _chat_model is None or _chat_name != name:
             _ensure_env_loaded()
-            _chat_model=ChatModelFactory().generator()
-            _chat_name=name
+            _chat_model = ChatModelFactory().generator()
+            _chat_name = name
         return _chat_model
+
+
+def get_role_model(role: str) -> BaseChatModel:
+    """按角色取模型，例如 ``decision`` / ``grounding``。
+
+    配置项是 ``config/model.yml`` 里的 ``<role>_model_name``。
+    **留空则直接返回 get_chat_model() 单例**，所以不配任何角色时行为与
+    改动前完全一致（同一个实例，测试里 patch get_chat_model 也仍然有效）。
+
+    为什么要分角色：一次带检索的问答里，各次调用的难度差别很大——
+    首次工具选择是路由判断，grounding 是"原文是否覆盖问题"的核对，
+    两者都比自由写作简单，用旗舰模型是在为不需要的能力付延迟。
+    """
+    with _MODEL_LOCK:
+        name = model_conf.get(f"{role}_model_name")
+        if not name:
+            return get_chat_model()
+        if role not in _role_models or _role_names.get(role) != name:
+            _ensure_env_loaded()
+            _role_models[role] = _build_chat_model(name)
+            _role_names[role] = name
+        return _role_models[role]
+
+
+def get_decision_model() -> BaseChatModel:
+    """首次工具决策用。未配置时等同 get_chat_model()。"""
+    return get_role_model("decision")
+
+
+def get_grounding_model() -> BaseChatModel:
+    """证据核对与受约束生成用。未配置时等同 get_chat_model()。"""
+    return get_role_model("grounding")
 
 
 def get_embed_model() -> Embeddings:

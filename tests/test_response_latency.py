@@ -224,7 +224,10 @@ class ProviderWiringTests(unittest.TestCase):
                             for payload in requests))
         self.assertTrue(all(settings.get("read") == 9 for settings in timeouts))
         functions = {item["function"]["name"]: item["function"] for item in requests[0]["tools"]}
-        self.assertEqual(set(functions), {"rag_summarize", "get_weather", "get_user_location", "get_user_id"})
+        self.assertEqual(set(functions), {
+            "rag_summarize", "get_weather", "get_user_location", "get_user_id",
+            "get_current_month", "fetch_external_data", "enter_report_mode",
+        })
         self.assertEqual(functions["get_user_id"]["parameters"].get("properties"), {})
         phases = [payload["phase"] for mode, payload in events if mode == "custom" and "phase" in payload]
         self.assertIn("正在理解问题", phases)
