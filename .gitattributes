@@ -1,0 +1,13 @@
+# 统一换行符。
+# 本机 core.autocrlf=true，若不做约束，提交时会把 .sh 的 LF 换成 CRLF，
+# 检出到 Linux / Git Bash 后执行 start.sh 会报 "bad interpreter: /usr/bin/env bash^M"。
+* text=auto eol=lf
+
+# PowerShell 脚本保持 CRLF，避免部分编辑器和旧版控制台的兼容问题
+*.ps1 text eol=crlf
+
+# 二进制/无需转换
+*.png binary
+*.jpg binary
+*.pdf binary
+*.sqlite binary

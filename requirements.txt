@@ -17,6 +17,9 @@ langchain-openai==1.6.0
 langchain-chroma==1.1.0
 chromadb==1.5.9
 
+# --- 联网搜索（get_weather 的实时天气来源）---
+tavily-python==0.8.1
+
 # 检索重排走 DashScope 自己的 SDK（rag/reranker.py）。
 # ⚠️ 这一度缺失，而 `from dashscope import TextReRank` 写在 try 块内 →
 # ImportError 被"重排失败降级"一起吞掉，于是照本文件装出来的干净环境会
@@ -28,8 +31,12 @@ langchain-community==0.4.2
 langchain-text-splitters==1.1.2
 pypdf==6.15.0
 
-# --- 界面 ---
-streamlit==1.64.0
+# --- Web 服务 ---
+fastapi==0.141.1
+# standard extra 带 watchfiles（--reload 需要）、websockets、httptools
+uvicorn[standard]==0.52.4
+# 知识文件上传（multipart/form-data）必需，缺了发布接口会直接 500
+python-multipart==0.0.32
 
 # --- 基础 ---
 python-dotenv==1.2.3

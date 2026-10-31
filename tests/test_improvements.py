@@ -243,16 +243,3 @@ class ProviderAndUiTests(unittest.TestCase):
             schema = next(t["function"] for t in seen[0]["tools"] if t["function"]["name"] == "get_user_id")
             self.assertEqual(set(schema["parameters"]["properties"]), set())
             self.assertNotIn("fetch_external_data", [t["function"]["name"] for t in seen[0]["tools"]])
-
-    def test_login_reads_env_before_password_check(self):
-        import os
-        from streamlit.testing.v1 import AppTest
-        def load():
-            os.environ["APP_PASSWORD"] = "synthetic-login-test"
-        with patch.dict(os.environ, {}, clear=False), patch("utils.env.ensure_env_loaded", side_effect=load):
-            os.environ.pop("APP_PASSWORD", None)
-            app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"))
-            app.run(timeout=10)
-            self.assertEqual(len(app.exception), 0)
-            self.assertTrue(any(item.label == "访问密码" for item in app.text_input))
-            self.assertFalse(any("未设置 APP_PASSWORD" in item.value for item in app.warning))

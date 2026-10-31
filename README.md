@@ -1,75 +1,71 @@
 # 智扫通机器人智能客服
 
-基于 LangChain `create_agent`、LangGraph、Streamlit 的扫地/扫拖机器人客服，包含知识库问答、多轮记忆、工具调用、回复点赞，以及独立管理员控制台。
+基于 LangChain `create_agent`、LangGraph 的扫地/扫拖机器人客服。后端 FastAPI，前端 Vue 3，包含知识库问答、多轮记忆、工具调用、回复点赞，以及独立管理控制台。
 
 已移除设备引导排障、报告生成/导出和人工转交功能。管理员登录后进入独立界面，8 小时内刷新可恢复登录。
 
-最新功能与操作说明见 [功能与测试说明](功能与测试说明.md)。
+架构取舍、API 清单与实测数据见 [FastAPI 重构说明](docs/FastAPI重构说明.md)。
 
 ## 启动
 
-已在 Python 3.10.20 环境验证。建议在独立虚拟环境中安装 `requirements.txt` 锁定的依赖。
-以下为 Windows PowerShell 命令，从 `RAG与agent开发` 目录执行；如果已在 `Agent项目` 目录，跳过第一行。本文所称“项目根”及后续命令的工作目录均为 `Agent项目`。
+在 Python 3.10.20 环境验证（本机 `D:\anaconda3\envs\time`）。首次需装依赖并构建前端：
 
 ```powershell
-cd "Agent项目"
 python -m pip install -r requirements.txt
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+
+cd web
+npm install
+npm run build
+cd ..
+
+.\start.ps1
 ```
 
-编辑项目根的 `.env`，配置以下变量；已有 `.env` 时直接编辑，不要用示例文件覆盖：
+打开 <http://127.0.0.1:8000>，接口文档在 `/docs`。
+
+`start.ps1` 支持 `-Python`、`-Port`，缺前端产物会自动构建。Bash 下用 `./start.sh`。
+
+开发模式开两个终端（`/api` 已在 vite 里代理到 8000，cookie 同源生效）：
+
+```powershell
+python -m server --port 8000 --reload
+cd web; npm run dev        # http://localhost:5173
+```
+
+编辑 `.env`，配置以下变量：
 
 | 变量 | 用途 |
 |---|---|
 | `DASHSCOPE_API_KEY` | 必填，DashScope API Key |
-| `DASHSCOPE_BASE_URL` | 对话和 embedding 的兼容接口地址，示例为 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `DASHSCOPE_BASE_URL` | 对话和 embedding 的兼容接口地址 |
 | `APP_PASSWORD` | 可选，用户端共享访问密码；留空进入本地演示模式 |
-| `ADMIN_PASSWORD` | 启用管理员功能时必填；留空会显示“管理员登录未启用” |
+| `ADMIN_PASSWORD` | 启用管理员功能时必填；留空会显示"管理员登录未启用" |
+| `TAVILY_API_KEY` | 可选，天气工具的联网搜索来源 |
 
-保存配置后启动：
+`.env` 固定从项目根读取，在访问密码判断前加载；已导出的环境变量优先。所有数据路径按项目根解析。
 
-```powershell
-python -m streamlit run app.py
-```
+服务启动时在后台线程完成 Agent 装配与知识库检查，uvicorn 立刻开始接收请求，页面会显示初始化进度。首次进入不需要额外等待，冷启动实测 1.4–1.8 秒。
 
-在 Bash 中进入项目目录后，同样使用上述 `python -m ...` 命令；首次创建 `.env` 时用 `cp .env.example .env`，已有文件则跳过复制。
-
-`.env` 固定从项目根读取，在访问密码判断前加载；已导出的环境变量优先。
-所有数据路径按项目根解析。首次进入用户端时会调用 embedding 建库，后续新页面会话检查文件变化。
-
-启动时先显示标题和登录框，登录通过后才加载 Agent/RAG 重依赖，并显示初始化进度。
-同一服务进程中复用 Agent 和向量库连接；每个新页面会话仍检查知识文件变化。
-用户 ID、会话 ID 和每轮预算不进入共享资源缓存。模型名称支持运行时更新，具体操作见下方“管理员与模型配置”；修改 `.env`、提示词路径、Agent 预算、切分参数、超时等其他配置后需重启服务。
-首次登录后的组件加载仍有冷启动成本，缓存不会消除进程重启后的依赖导入。
+`--workers` 必须为 1：SqliteSaver、向量库连接、取消注册表都是进程内单例，多 worker 会导致会话历史写入竞争、停止信号打不到正确的进程。
 
 没有 `APP_PASSWORD` 时进入明确提示的本地演示模式。共享密码与演示用户下拉框不是正式账号体系；部署为多用户服务时，应从真实登录态注入身份并移除演示身份选择框。
-
-## 管理员与模型配置
-
-设置 `ADMIN_PASSWORD` 并启动服务后，在用户端侧栏“登录用户”下展开“管理员登录”，输入管理员密码进入独立控制台。如果设置了 `APP_PASSWORD`，首次进入用户端时还需先通过访问密码验证。
-
-管理员可管理知识文件、查看反馈与点赞，并在“概览 → 模型配置”中修改模型 ID：
-
-- 聊天、重排模型：点击“保存并应用模型”后用于下一次问答，无需重启；正在运行的问答先完成。
-- 嵌入模型：需要勾选重建确认，再点击“保存并应用模型”。系统使用新 embedding 重建知识库，成功后切换；构建失败时恢复原配置和活动集合。
-- 模型名称保存到 `config/model.yml` 和 `config/chroma.yml`。名称须与所配置服务兼容，聊天与重排服务是否可用仍以实际调用为准。
-
-管理员登录令牌有效期为 8 小时；有效期内刷新或服务重启可恢复登录。点击“退出管理员”会撤销当前令牌。令牌过期、修改管理员密码并重启服务，或清除浏览器 Cookie 后需重新登录。
 
 ## 目录
 
 | 路径 | 用途 |
 |---|---|
-| `app.py` | 登录、会话管理、实时答复和引用展示 |
+| `server/` | FastAPI 后端：路由、SSE 传输、鉴权、生命周期 |
+| `web/` | Vue 3 + Vite 前端 |
 | `agent/react_agent.py` | Agent 装配、事件流、身份校验、持久化历史 |
-| `agent/tools/agent_tools.py` | 当前注册工具：知识检索、模拟天气、模拟位置、用户 ID |
+| `agent/tools/agent_tools.py` | 当前注册工具：知识检索、联网天气（Tavily）、位置询问、用户 ID |
 | `agent/tools/middleware.py` | 并发工具预算、模型预算、上下文裁剪、动态提示词 |
-| `utils/service_ui.py` | 管理员入口、控制台、模型配置界面与点赞 |
-| `utils/model_settings.py` | 模型配置更新、嵌入模型重建及失败恢复 |
-| `utils/admin_auth.py` | 管理员令牌签发、恢复与撤销 |
 | `rag/vector_store.py` | 切分、向量检索、增量构建与原子发布 |
 | `rag/reranker.py` | 重排、超时与失败降级 |
 | `rag/rag_service.py` | 摘要/原文两种检索返回路径 |
+| `utils/admin_auth.py` | 管理员令牌签发与校验 |
+| `utils/model_settings.py` | 模型配置更新、嵌入模型重建及失败恢复 |
+| `utils/knowledge_admin.py` | 资料发布的事务层（备份、原子写、回滚） |
 | `eval/` | 检索基线、Agent 最终拒答及成本评估 |
 | `tests/` | 离线测试，使用模拟模型和临时数据库 |
 
@@ -77,12 +73,13 @@ python -m streamlit run app.py
 
 ## 身份与会话
 
-- 用户 ID 由调用方通过 `user_id` 传入，再经 `ToolRuntime.context` 注入工具；当前 `get_user_id` 工具无需模型传入身份，模型 schema 不包含 `user_id` 或 `runtime`。
+- 用户身份由服务端签发的签名 cookie 决定，请求体里的 `user_id` 一律不采信；切换演示用户也由服务端重签。
+- 当前会话 ID 存在 URL 的 `chat` 参数里，刷新后恢复；不保存聊天正文、密码或管理员令牌。
+- 会话列表通过 SQL 先筛选 ID，每个会话只读取最新检查点。默认显示 20 个，但"清理其他会话"处理该身份的全部会话。
 - 公共会话读、写、删入口检查归属：只接受 `user-{ID}` 或 `user-{ID}-...`；ID 为数字字符串，避免前缀碰撞。
-- 会话列表通过 SQL 先筛选 ID，每个会话只读取最新检查点。默认显示 20 个，但“清理其他会话”处理该身份的全部会话。
-- 删除仍需要界面二次确认。`checkpoints.sqlite` 保存完整消息，模型调用时裁剪上下文不会删除历史。
+- 删除需要界面二次确认。`checkpoints.sqlite` 保存完整消息，模型调用时裁剪上下文不会删除历史。
 
-编程调用：完成依赖安装和 `.env` 配置后，将以下代码保存为项目根的 Python 脚本并运行。示例会先检查并按需构建知识库，再调用在线模型；对话历史写入默认 `checkpoints.sqlite`。
+编程调用：
 
 ```python
 from utils.env import ensure_env_loaded
@@ -101,21 +98,37 @@ with configuration_guard():
 answer = agent.answer("滤网怎么维护？", thread_id="user-1001", user_id="1001")
 print(answer)
 history = agent.load_history("user-1001", "1001")
-print(history)
 ```
 
-默认 `default` 会话不再允许匿名调用。自定义检查点通过 `ReactAgent(checkpointer=...)` 注入，历史列表和删除使用同一实例。
+默认 `default` 会话不再允许匿名调用。自定义检查点通过 `ReactAgent(checkpointer=...)` 注入。
+
+## 响应与流式
+
+一轮问答通过 SSE 推送，事件与 `ReactAgent.stream_events` 一一对应：
+
+| 事件 | 含义 |
+|---|---|
+| `phase` | 当前阶段（理解问题、检索资料、生成回复、核对答复） |
+| `content` | 模型输出的文本增量 |
+| `tool_start` / `tool_end` | 工具开始/结束，带工具名 |
+| `sources` | 本次检索引用的资料 |
+| `final` | 最终答复全文 |
+
+本机实测（"你好"）：答复首字 2.1 秒，完整回复 3.0 秒。**瓶颈是模型链路**——首次决策、检索、rerank、核对四段网络往返，换前端框架不影响这部分。
+
+`config/agent.yml` 的 `decision_disable_thinking: true` 默认关闭首次工具决策和闲聊的思考；`answer_disable_thinking` 独立控制拿到工具结果后的模型调用。模型不支持 `enable_thinking` 时，将相关开关及 `config/model.yml` 的 `grounding_disable_thinking` 设为 `false`。
+
+交互聊天使用独立的 `chat_request_timeout: 45`、`chat_max_retries: 0`。停止生成是协作式的：已发出的网络请求仍需等待本次请求返回或超时。
 
 ## 数据脱敏
 
 `utils/redact.py` 是所有存储出口的统一过滤层：识别手机号、18 位身份证、16–19 位银行卡、邮箱、订单号（关键词锚定）和带前缀的详细地址，替换为 `138****5678` 这类掩码。
 
-- 日志：`utils/logger_handler.py` 的 `RedactingFormatter` 在 `format()` 末尾调用，`msg`、格式化参数和异常栈一起覆盖（挂在 Formatter 而不是 Filter 上，就是为了拦住 `logger.exception` 的 traceback）。
+- 日志：`utils/logger_handler.py` 的 `RedactingFormatter` 在 `format()` 末尾调用，`msg`、格式化参数和异常栈一起覆盖（挂在 Formatter 而不是 Filter 上，就是为了拦住 `logger.exception` 的 traceback）。`server` 命名空间的日志复用同一批 handler。
 - 反馈：`save_feedback` 在写 `feedback.sqlite` 前处理 `question` / `answer` / `reason`。
-- 只作用于存储与日志，**不改**送模型的输入和返回给用户的回答——否则“订单 AB****78 到哪了”这类问题无法处理。
-- `checkpoints.sqlite` 目前仍保存完整消息，尚未接入脱敏；它需要包一层 `SqliteSaver` 的序列化，成本高于前两处。
+- 只作用于存储与日志，**不改**送模型的输入和返回给用户的回答。
+- `checkpoints.sqlite` 目前仍保存完整消息，尚未接入脱敏。
 - 已知边界：没有关键词前缀的自由文本地址、图片/PDF 内文字不覆盖；上游 `content[:200]` 截断可能把号码切成不足 11 位而漏判。
-- 规则幂等，重复处理不会二次破坏；内部异常时返回原文，不阻断日志或反馈写入。
 
 ## 知识库构建与恢复
 
@@ -125,22 +138,23 @@ print(history)
 2. 在独立的新 Chroma 集合中构建。增量更新直接复制未变化文件的 embedding，仅重新计算新增/修改文件。
 3. 块 ID 根据来源、位置和正文确定。检查实际文件/块计数，并确认源文件在构建期间未变化。
 4. 新集合完整后，原子替换 `kb_meta.json`，发布 `active_collection`。
-5. 失败时不发布，新启动仍能读取旧集合；检索服务会在后续查询前刷新已发布集合。
+5. 失败时不发布，新启动仍能读取旧集合。
 
-不再先删除当前可用集合。旧集合暂时保留，以免破坏正在执行的查询；因此更新会增加磁盘占用，需要在停服维护时按元数据确认活动集合后清理历史集合。不要直接删除正在运行的 Chroma 段目录。
-旧格式元数据可加载；完整性清单不匹配时自动重建。切分规则变化仍需要更新 `SPLITTER_VERSION`。
+旧集合暂时保留，以免破坏正在执行的查询；因此更新会增加磁盘占用，需要在停服维护时按元数据确认活动集合后清理历史集合。不要直接删除正在运行的 Chroma 段目录。切分规则变化仍需要更新 `SPLITTER_VERSION`。
 
 ## 检索与引用
 
-当前普通问答默认：向量粗召回 → 可选距离过滤 → rerank → 取前 k 条原文 → 受约束生成与引用校验 → 最终答复。
+默认：向量粗召回 → 可选距离过滤 → rerank → 取前 k 条原文 → 受约束生成与引用校验 → 最终答复。
 
-`config/chroma.yml` 控制 `k`、`rerank_fetch_k`、重排模型与超时。`max_distance` 默认关闭，不能在换 embedding 后直接沿用未经标定的距离阈值。重排失败降级为向量顺序，日志记录是否实际重排；侧栏显示索引统计和配置中的模型名称，不代表远端服务实时健康。
+`config/chroma.yml` 控制 `k`、`rerank_fetch_k`、重排模型与超时。`max_distance` 默认关闭。重排失败降级为向量顺序，日志记录是否实际重排；侧栏显示索引统计和配置中的模型名称，不代表远端服务实时健康。
 
-`config/agent.yml` 的 `rag_raw_documents: true` 开启原文路径：普通问答直接把检索原文交给 Agent，减少一次摘要调用；设为 `false` 则先生成检索摘要。当前默认启用原文路径，并配合受约束生成与引用校验；不能把召回到内容等同于内容能回答问题。
+`config/agent.yml` 的 `rag_raw_documents: true` 开启原文路径：普通问答直接把检索原文交给 Agent，减少一次摘要调用；设为 `false` 则先生成检索摘要。
 
-引用按块 ID 去重，保留完整原文和 PDF 页码；历史重新加载后仍显示资料。模型被要求保留 `[数字]` 短引用，但界面列出的仍是检索参考资料，不能仅凭列表断言每条结论都得到资料支持。旧历史中只有短片段的记录不会自动恢复成完整原文。
+引用按块 ID 去重，保留完整原文和 PDF 页码；历史重新加载后仍显示资料。模型被要求保留 `[数字]` 短引用，但界面列出的仍是检索参考资料，不能仅凭列表断言每条结论都得到资料支持。
 
-天气和位置工具目前是模拟数据，输出明确标记，不代表实时天气或用户真实位置。
+天气工具通过 Tavily 联网搜索，返回网页摘要、来源链接和"可能滞后"的提示。Tavily 的 `include_answer` 实测会把抓到的旧页面复述成"今天"，因此已关闭，只给原始摘要。
+
+位置工具没有定位能力：`get_user_location` 只会返回 `[需要用户城市]` 提示，由模型在回答中询问用户所在城市。`get_weather` 会拒绝"这里""当前"这类非城市名入参。
 
 ## Agent 预算
 
@@ -150,9 +164,9 @@ print(history)
 | `turn_timeout` | 180 秒 | 调用边界检查时间预算，超出后生成可持久化的结束提示 |
 | `context_max_chars` | 24000 | 按完整回合裁剪旧消息，保持当前工具消息配对 |
 
-工具总预算为 10 次，其中检索最多 4 次，定义在 `agent/runtime.py`；当前其余已注册工具只受总预算约束。预算检查与预留在锁内完成，避免并发超发。达到预算后从模型可选工具中移除对应工具。
+工具总预算为 10 次，其中检索最多 4 次，定义在 `agent/runtime.py`。预算检查与预留在锁内完成，避免并发超发。
 
-时间预算是协作式检查，不能强制取消已经运行的工具，SDK 重试也可能使实际总耗时超过预算。它不是严格的进程级超时。外层模型日志记录耗时和 token 信息；端到端评估通过回调统计 Agent 链路 token。
+时间预算是协作式检查，不能强制取消已经运行的工具。外层模型日志记录耗时和 token 信息；端到端评估通过回调统计 Agent 链路 token。
 
 ## 验证与评估
 
@@ -162,7 +176,9 @@ print(history)
 python -m unittest discover -s tests -q
 ```
 
-测试覆盖真实 LangGraph 工具身份注入、工具 schema、并发预算、停止收尾、非 token 流答复、历史引用、跨身份隔离、20 个以上会话清理、Chroma 构建失败恢复和重复写入防护等。
+当前 215 项。覆盖真实 LangGraph 工具身份注入、工具 schema、并发预算、停止收口、非 token 流答复、历史引用、跨身份隔离、20 个以上会话清理、Chroma 构建失败恢复、管理员令牌过期与撤销、日志脱敏等。
+
+> 已知偶发：`IndexTests` 里 Chroma 的临时目录读写偶尔报 `Nothing found on disk`，重跑即过，与业务逻辑无关。
 
 检索质量需要在线调用模型：
 
@@ -170,28 +186,22 @@ python -m unittest discover -s tests -q
 python -m eval.retrieval_eval --set=all --judge --refusals
 python -m eval.retrieval_eval --set=all --judge --refusals --snapshot
 python -m eval.retrieval_eval --set=all --judge --refusals --check-baseline
-# 固定题集和语料，允许配置变化的对照实验：
-python -m eval.retrieval_eval --set=all --judge --refusals --check-baseline --compare-config
 ```
 
-指纹包含语料、提示词和题集哈希，以及检索配置。旧基线没有新字段时报告“未验证”，必须重新评估，不能把旧数字补字段后冒充新结果。漏跑模型判据、已有集合或已有拒答检查会失败。配置变化时重新拍快照不会继承旧配置下的其他集合成绩。
+指纹包含语料、提示词和题集哈希，以及检索配置。旧基线没有新字段时报告"未验证"，必须重新评估。
 
-默认检查对配置变化报过期；显式 `--compare-config` 在题集和语料相同的前提下继续比较。关键词回退为提示，模型判据/拒答回退为失败。检索评估仍会按当前配置初始化知识库；实验切分或 embedding 配置时，请在独立项目副本运行。
-
-`--refusals` 检查的是检索摘要工具。另有评估完整 Agent 最终回答、延迟和 token 的命令：
+评估完整 Agent 最终回答、延迟和 token：
 
 ```bash
 python -m eval.agent_eval --mode summary --output eval/agent-summary.json
 python -m eval.agent_eval --mode raw --output eval/agent-raw.json
 ```
 
-运行前需先通过应用成功初始化知识库。该命令使用内存会话，不写真实对话历史，不更新知识库。它会调用在线模型及裁判，结果保留最终答复供人工核查；裁判与生成模型同源，有误判可能。token 统计不含裁判调用。
-
 ## 配置与限制
 
 - `config/model.yml`：模型、单次请求超时、重试参数。
 - `config/chroma.yml`：知识库、切分、重排与检索参数。
-- `config/agent.yml`：Agent 预算、原文/摘要路径开关；演示月份和外部记录路径是未接入当前 Agent 的遗留配置。
+- `config/agent.yml`：Agent 预算、原文/摘要路径开关。
 - `config/prompts.yml`：提示词文件路径。
 - SQLite 备份应使用 SQLite backup API，不能在运行期间只复制主文件而忽略 WAL。
-- 上游 LangChain/Pydantic 序列化警告仍可能出现；不影响已验证的工具执行，但升级依赖后应重跑测试。
+- 上游 LangChain/Pydantic 序列化警告仍可能出现；升级依赖后应重跑测试。

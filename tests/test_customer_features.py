@@ -141,49 +141,20 @@ class KnowledgeTests(unittest.TestCase):
                 self.assertTrue(VectorStoreService()._db_is_complete())
 
 
-class PageTests(unittest.TestCase):
-    def test_ui_switch_background_answer_export_and_forms(self):
-        from streamlit.testing.v1 import AppTest
-        from utils.app_resources import get_agent,get_vector_service
-        get_agent.clear();get_vector_service.clear()
-        with sqlite3.connect(':memory:',check_same_thread=False) as conn, patch.dict(os.environ,{'ADMIN_PASSWORD':''}):
-            with patch('agent.react_agent.get_chat_model',return_value=PlainModel()):
-                agent=ReactAgent(SqliteSaver(conn))
-            with patch('utils.env.ensure_env_loaded'),patch('utils.app_resources.get_agent',return_value=agent),patch('utils.app_resources.get_vector_service') as store:
-                store.return_value.load_document.return_value='ready'
-                app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'))
-                app.session_state['authed']=True;app.run(timeout=20)
-                next(x for x in app.selectbox if x.label=='登录用户').select('1002').run(timeout=20)
-                next(b for b in app.button if b.label=='开始新会话').click().run(timeout=20)
-                self.assertEqual(len(app.exception),0)
-                self.assertTrue(app.session_state['thread_id'].startswith('user-1002-'))
-                app.chat_input[0].set_value('hello').run(timeout=20)
-                job=app.session_state['answer_job'];self.assertTrue(job.done.wait(10))
-                app.run(timeout=20)
-                self.assertEqual(len(app.exception),0)
-                self.assertTrue(any('reply:hello' in m.value for m in app.markdown))
-                self.assertFalse(any(x.label=='这条回答有帮助吗？' for x in app.radio))
-                self.assertTrue(any(x.label=='👍' for x in app.button))
-                self.assertFalse(any(x.label=='人工客服转交草稿（不会自动发送）' for x in app.text_area))
-        get_agent.clear();get_vector_service.clear()
-
-
 class StopAndLockTests(unittest.TestCase):
-    def test_running_job_can_stop(self):
-        from utils.jobs import AnswerJob
-        class SlowModel(PlainModel):
-            def _generate(self,messages,**kwargs):
-                time.sleep(.3)
-                return ChatResult(generations=[ChatGeneration(message=AIMessage(content='should not be delivered'))])
-        with sqlite3.connect(':memory:',check_same_thread=False) as conn, patch('agent.react_agent.get_chat_model',return_value=SlowModel()):
+    def test_cancel_before_start_leaves_no_trace(self):
+        """取消路径的底线：cancel 已置位时这一轮根本不启动，历史不被污染。
+
+        旧版这里用 AnswerJob 测（它自己往界面写"已停止"），该类已随
+        Streamlit 前端移除。真正要守的契约在 agent 层：停止按钮走的
+        就是同一个 cancel_event，先置位就不该留下用户消息或半截回答。
+        """
+        with sqlite3.connect(':memory:',check_same_thread=False) as conn,patch('agent.react_agent.get_chat_model',return_value=PlainModel()):
             agent=ReactAgent(SqliteSaver(conn))
-            job=AnswerJob(agent,'hi','user-1001','1001')
-            time.sleep(.1);job.cancel.set()
-            self.assertTrue(job.done.wait(5))
-            self.assertIsNone(job.error)
-            history=agent.load_history('user-1001','1001')
-            self.assertIn('停止',history[-1]['content'])
-            self.assertNotIn('should not',history[-1]['content'])
+            cancel=threading.Event();cancel.set()
+            events=list(agent.stream_events('hi','user-1001','1001',cancel_event=cancel))
+            self.assertEqual(events,[])
+            self.assertEqual(agent.load_history('user-1001','1001'),[])
 
     def test_file_checkpointers_share_lock_namespace(self):
         with tempfile.TemporaryDirectory() as tmp:

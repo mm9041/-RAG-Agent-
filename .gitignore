@@ -4,6 +4,15 @@
 .env.*
 !.env.example
 
+# ===== 本地签名密钥 =====
+# 用户端会话 cookie 的 HMAC 密钥，泄漏即可伪造任意演示身份
+.session_secret
+
+# ===== 前端 =====
+web/node_modules/
+# 构建产物：start.ps1 会在缺失时自动构建
+web/dist/
+
 # ===== 向量库 =====
 # 可由 data/ 目录重建，且含大量二进制文件，不入库
 chroma_db/
