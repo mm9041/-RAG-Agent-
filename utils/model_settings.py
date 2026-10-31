@@ -10,14 +10,31 @@ import yaml
 from utils.path_tool import get_abs_path
 
 
+class ConfigurationBusy(RuntimeError):
+    """模型配置写入被正在进行的初始化/重建阻塞。"""
+
+
 @contextmanager
-def configuration_guard(write=False):
-    conn=sqlite3.connect(get_abs_path('.config_guard.sqlite'),timeout=300)
+def configuration_guard(write=False, timeout=None):
+    """跨进程读写锁：读（共享）用于建库，写（独占）用于改配置。
+
+    timeout 不给时：读等 300 秒（建库可能很久），写只等 5 秒——
+    初始化期间管理员点"应用"若也排几分钟，最终只会得到一个超时 500，
+    不如快速失败并明确告知稍后再试。
+    """
+    if timeout is None:
+        timeout = 5 if write else 300
+    conn=sqlite3.connect(get_abs_path('.config_guard.sqlite'),timeout=timeout)
     try:
         conn.execute('CREATE TABLE IF NOT EXISTS guard (id INTEGER PRIMARY KEY)')
         conn.commit()
-        conn.execute('BEGIN EXCLUSIVE' if write else 'BEGIN')
-        conn.execute('SELECT * FROM guard').fetchall()
+        try:
+            conn.execute('BEGIN EXCLUSIVE' if write else 'BEGIN')
+            conn.execute('SELECT * FROM guard').fetchall()
+        except sqlite3.OperationalError as exc:
+            if write and ('locked' in str(exc).lower() or 'busy' in str(exc).lower()):
+                raise ConfigurationBusy('知识库正在初始化或重建，请稍候再修改模型配置') from exc
+            raise
         yield
         conn.commit()
     except BaseException:

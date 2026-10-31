@@ -139,7 +139,7 @@ def get_models(_: str = Depends(admin_token)):
 @router.put("/models")
 async def put_models(payload: ModelsRequest, token: str = Depends(admin_token)):
     from utils.config_handler import model_conf
-    from utils.model_settings import apply_models
+    from utils.model_settings import ConfigurationBusy, apply_models
 
     changed_embedding = payload.embedding.strip() != model_conf["embedding_model_name"]
     if changed_embedding and not payload.confirm_rebuild:
@@ -153,6 +153,9 @@ async def put_models(payload: ModelsRequest, token: str = Depends(admin_token)):
         )
     except PermissionError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except ConfigurationBusy as exc:
+        # 初始化/重建正持有读锁：快速失败，而不是让管理员等满超时
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - 失败时原配置已回滚，把原因给前端
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,

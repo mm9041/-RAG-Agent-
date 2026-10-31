@@ -7,6 +7,25 @@ from utils.progress import answer_delta, current_progress_context, phase, progre
 from utils.retry import RetryCancelled, RetryDeadlineExceeded, call_with_retry
 
 
+class FakeClock:
+    """只实现 utils.retry 用到的两个接口，sleep 推进 monotonic。
+
+    sleep 略微多走 1e-6 秒，模拟真实 sleep 的轻微超时，
+    确保“预算耗尽”判定不因浮点误差而恰好擦边通过。
+    """
+
+    def __init__(self, now):
+        self.now = now
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds + 1e-6
+
+
 class RetryProgressTests(unittest.TestCase):
     def test_actual_backoff_reports_safe_progress_and_resumes(self):
         events = []
@@ -54,13 +73,26 @@ class RetryProgressTests(unittest.TestCase):
         call.assert_not_called()
 
     def test_deadline_limits_backoff_and_prevents_next_request(self):
+        """预算耗尽后不再发请求，长退避必须被截断。
+
+        不能用真实计时：Windows 的 sleep 可能提前返回（40ms 预算下会多打
+        一次请求），首次日志写入也可能占掉 1 秒以上。改为可控时钟后，
+        断言只依赖逻辑，不依赖机器速度。
+        """
         call = Mock(side_effect=RuntimeError("Service unavailable"))
         started = time.monotonic()
-        with progress_context(cancel_event=threading.Event(), deadline=started + 0.04):
+        clock = FakeClock(started)
+
+        with progress_context(deadline=started + 0.04), \
+                patch("utils.retry.time", clock):
             with self.assertRaises(RetryDeadlineExceeded):
                 call_with_retry(call, what="test", retries=3, backoff=10)
+
         self.assertEqual(call.call_count, 1)
-        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(len(clock.sleeps), 1)
+        # 10 秒退避被截断到剩余预算，而不是真睡 10 秒
+        self.assertAlmostEqual(clock.sleeps[0], 0.04, places=6)
+        self.assertLess(sum(clock.sleeps), 1)
 
     def test_permanent_error_does_not_wait_or_report_retry(self):
         events = []

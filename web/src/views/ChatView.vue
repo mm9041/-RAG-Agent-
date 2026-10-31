@@ -221,7 +221,12 @@ async function retryBoot() {
   await checkStatus()
   try {
     const res = await api.post<SystemStatus & { ok: boolean; error?: string }>('/api/system/retry')
-    if (!res.ok) bootError.value = res.error ?? '初始化失败'
+    if (res.booting) {
+      // 已有初始化在进行：请求被立即接受但不会另起一次，恢复轮询等它完成
+      startPolling()
+    } else if (!res.ok) {
+      bootError.value = res.error ?? '初始化失败'
+    }
   } catch (err) {
     bootError.value = err instanceof Error ? err.message : String(err)
   }

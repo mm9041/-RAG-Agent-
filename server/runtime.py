@@ -30,6 +30,9 @@ _state: dict[str, Any] = {
     "error": None,
     "started_at": None,
     "ready_at": None,
+    # 失败/停止时的结束时刻：没有它，status() 会在失败后让 boot_seconds
+    # 一直增长，界面看起来像"还在初始化"，实际早已结束。
+    "finished_at": None,
     "stage": "",
 }
 
@@ -43,15 +46,22 @@ def bootstrap() -> dict:
     """加载向量库与 Agent。可重复调用，成功后直接复用。
 
     同步实现：调用方（lifespan / 重试接口）负责用 to_thread 包一层。
+
+    **非阻塞抢锁**：已有初始化在进行时立即返回当前进度，而不是让第二个
+    调用方排在建库后面等几分钟——重试按钮等不到响应只会超时。
     """
-    with _boot_lock:
+    if not _boot_lock.acquire(blocking=False):
+        return status()
+    try:
         if _read()["ready"]:
             return status()
-        _update(booting=True, error=None, started_at=time.time(), stage="加载配置")
-
-        from utils.model_settings import configuration_guard, refresh_model_settings
+        _update(
+            booting=True, error=None, started_at=time.time(),
+            ready_at=None, finished_at=None, stage="加载配置",
+        )
 
         try:
+            from utils.model_settings import configuration_guard, refresh_model_settings
             from agent.react_agent import ReactAgent
             from rag.vector_store import VectorStoreService
 
@@ -66,7 +76,10 @@ def bootstrap() -> dict:
                 _update(stage="装配对话服务")
                 agent = ReactAgent()
         except Exception as exc:  # noqa: BLE001 - 原始错误要透给前端
-            _update(booting=False, error=f"{type(exc).__name__}: {exc}", stage="初始化失败")
+            _update(
+                booting=False, error=f"{type(exc).__name__}: {exc}",
+                stage="初始化失败", finished_at=time.time(),
+            )
             raise
         _update(
             vector=vector,
@@ -75,9 +88,12 @@ def bootstrap() -> dict:
             ready=True,
             booting=False,
             ready_at=time.time(),
+            finished_at=time.time(),
             stage="就绪",
         )
         return status()
+    finally:
+        _boot_lock.release()
 
 
 def _read() -> dict[str, Any]:
@@ -102,12 +118,32 @@ def get_vector_service():
 
 def status() -> dict:
     state = _read()
-    started, ready_at = state["started_at"], state["ready_at"]
+    started = state["started_at"]
+    # 结束时刻优先取 ready_at，其次 finished_at（失败/停止），都没有才按"仍在跑"算
+    finished = state["ready_at"] or state["finished_at"]
     return {
         "ready": state["ready"],
         "booting": state["booting"],
         "stage": state["stage"],
         "error": state["error"],
-        "boot_seconds": round((ready_at or time.time()) - started, 2) if started else None,
+        "boot_seconds": round((finished or time.time()) - started, 2) if started else None,
         "kb": state["kb"],
     }
+
+
+def shutdown() -> None:
+    """释放共享引用，由 lifespan 在进程退出时调用。
+
+    只清引用、不复位 `kb`（管理页仍想看到最后一次建库摘要），
+    也不关闭 SqliteSaver 的连接：它是进程级单例，句柄交给进程退出回收。
+    """
+    with _state_lock:
+        _state.update(
+            agent=None,
+            vector=None,
+            ready=False,
+            booting=False,
+            stage="已停止",
+            finished_at=time.time(),
+        )
+    logger.info("客服组件已卸载")

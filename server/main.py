@@ -12,7 +12,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,7 +36,11 @@ DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 def _boot() -> None:
     try:
         state = runtime.bootstrap()
-        logger.info("客服组件已就绪，用时 %s 秒", state.get("boot_seconds"))
+        if state.get("ready"):
+            logger.info("客服组件已就绪，用时 %s 秒", state.get("boot_seconds"))
+        else:
+            # 非阻塞抢锁时可能已有其他初始化在跑，这里不算失败
+            logger.info("客服组件已在初始化中，跳过本次预热")
     except Exception:  # noqa: BLE001 - 失败信息已存进 runtime，前端可读取并重试
         logger.exception("客服组件初始化失败，可在页面上点重新初始化")
 
@@ -44,7 +48,11 @@ def _boot() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     threading.Thread(target=_boot, daemon=True, name="bootstrap").start()
-    yield
+    try:
+        yield
+    finally:
+        # 只清共享引用；初始化线程是 daemon，进程退出时由系统回收
+        runtime.shutdown()
 
 
 app = FastAPI(title="智扫通智能客服", version="2.0.0", lifespan=lifespan)
@@ -57,6 +65,27 @@ app.include_router(feedback.router)
 app.include_router(admin.router)
 
 
+@app.api_route(
+    "/api",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/{rest:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    include_in_schema=False,
+)
+async def api_not_found(rest: str = ""):  # noqa: ARG001
+    """未命中的 API 一律返回 JSON 404。
+
+    必须注册在真实路由之后：``{rest:path}`` 会匹配整个 /api 前缀；
+    也必须在 SPA 兜底之前，否则 GET 会拿到 index.html、
+    POST 会因为路径匹配而方法不匹配得到 405，前端都很难定位。
+    ``/api`` 额外单列一条：``:path`` 转换器要求前缀带斜杠，不会匹配裸路径。
+    """
+    raise HTTPException(status.HTTP_404_NOT_FOUND, detail="接口不存在")
+
+
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception):  # noqa: ARG001
     """兜底成 JSON：默认的 HTML 错误页会让前端 fetch 解析失败。"""
@@ -67,23 +96,49 @@ async def unhandled(request: Request, exc: Exception):  # noqa: ARG001
     )
 
 
+@app.middleware("http")
+async def cache_headers(request: Request, call_next):
+    """补上 StaticFiles 不会自动发送的缓存策略。
+
+    - ``/assets/`` 文件名带内容 hash，可以 immutable 长缓存；
+    - HTML 入口必须每次回源校验，否则新构建的 hash 名引用不到；
+    - API 一律不缓存（SSE 自己的头优先，setdefault 不会覆盖）。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/") and response.status_code in (200, 304):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+    elif response.headers.get("content-type", "").startswith("text/html"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    elif path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 if (DIST / "assets").is_dir():
-    # 静态资源带 hash 文件名，可以放心长缓存
+    # 静态资源带 hash 文件名，可以放心长缓存（Cache-Control 见 cache_headers）
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """没有图标文件时返回 204，避免 SPA 兜底把 index.html 当成图标返回。"""
+    icon = DIST / "favicon.ico"
+    if icon.is_file():
+        return FileResponse(icon)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa(full_path: str):
     """前端单页路由兜底。
 
-    必须在所有 API 路由之后注册；``api`` 前缀不能落到这里，
-    否则打错的 API 地址会拿到一份 index.html 而不是 404。
+    必须在所有 API 路由、api_not_found 和 /assets 挂载之后注册；
+    未知的 ``api`` 前缀由 api_not_found 处理，不会落到这里。
 
     ``full_path`` 来自 URL，必须校验解析后的真实路径仍在 dist 内，
     否则 ``../../.env`` 这类请求会把项目文件读出去。
     """
-    if full_path.startswith("api/"):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="接口不存在")
     if not (DIST / "index.html").is_file():
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -92,6 +147,9 @@ async def spa(full_path: str):
     if full_path:
         root = DIST.resolve()
         candidate = (DIST / full_path).resolve()
-        if root in candidate.parents and candidate.is_file():
+        if root not in candidate.parents:
+            # 越界路径不再伪装成 SPA（200），直接 404，便于日志识别扫描
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="路径不存在")
+        if candidate.is_file():
             return FileResponse(candidate)
     return FileResponse(DIST / "index.html")

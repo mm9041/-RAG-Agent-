@@ -446,6 +446,36 @@ class VectorStoreService:
             self.vector_store = Chroma(collection_name=name, embedding_function=get_embed_model(),
                                        persist_directory=self.persist_directory)
 
+    def _reuse_chunks(self, source, target, path: str, expected: int) -> int:
+        """把旧集合里某个文件的向量原样复制到 staging，返回复制块数。
+
+        复用只是**性能优化**：实测 chromadb 1.5.9 在 Windows 上，刚删除过
+        一个 staging 集合后去读旧集合，偶发 ``InternalError: Error creating
+        hnsw segment reader: Nothing found on disk``。读不到就退回重新索引，
+        源文件才是真相——不能让一次可恢复的读抖动把整个增量更新判死，
+        否则“重试”会反复撞同一个错误。
+
+        调用前提：``self.vector_store`` 已经指向 staging，
+        这样降级时 ``_index_file`` 写入的仍是待发布集合。
+        """
+        try:
+            chunks = 0
+            while chunks < expected:
+                batch = source.get(where={"source": path}, limit=256, offset=chunks,
+                                   include=["documents", "metadatas", "embeddings"])
+                if not batch["ids"]:
+                    break
+                target._collection.upsert(ids=batch["ids"], documents=batch["documents"],
+                                          metadatas=batch["metadatas"], embeddings=batch["embeddings"])
+                chunks += len(batch["ids"])
+            return chunks
+        except Exception as exc:  # noqa: BLE001 - 复用失败必须可降级
+            logger.warning(
+                f"[知识库]{path} 复用旧向量失败，改为重新索引："
+                f"{type(exc).__name__}: {exc}"
+            )
+            return self._index_file(path)
+
     def load_document(self, force: bool = False) -> str:
         with index_lock(os.path.join(self.persist_directory, "build.lock")):
             return self._build_locked(force)
@@ -474,16 +504,8 @@ class VectorStoreService:
             manifest = {}
             for path, info in current.items():
                 if not rebuild and path not in changed:
-                    # 复用已有 embedding；分批复制，不发模型请求。
-                    chunks = 0
-                    while chunks < previous[path]["chunks"]:
-                        batch = active.get(where={"source": path}, limit=256, offset=chunks,
-                                           include=["documents", "metadatas", "embeddings"])
-                        if not batch["ids"]:
-                            break
-                        staging._collection.upsert(ids=batch["ids"], documents=batch["documents"],
-                            metadatas=batch["metadatas"], embeddings=batch["embeddings"])
-                        chunks += len(batch["ids"])
+                    # 复用已有 embedding；读失败会降级为重新索引（不发多余请求的优化）
+                    chunks = self._reuse_chunks(active, staging, path, previous[path]["chunks"])
                 else:
                     chunks = self._index_file(path)
                 manifest[path] = dict(info, chunks=chunks)

@@ -180,6 +180,37 @@ class IndexTests(unittest.TestCase):
                 other = VectorStoreService()
                 self.assertEqual(other.vector_store._collection.name, store.vector_store._collection.name)
 
+    def test_reuse_read_failure_falls_back_to_reindex(self):
+        """旧向量读不出来时必须降级重算，而不是让增量更新反复失败。
+
+        复现 chromadb 1.5.9 在 Windows 上的真实抖动：
+        删除过 staging 集合后，读旧集合偶发 Nothing found on disk。
+        复用只是性能优化，读失败应该退回重算而不是丢掉整次构建。
+        """
+        from rag.vector_store import VectorStoreService
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp); data = root / "data"; data.mkdir()
+            (data / "old.txt").write_text("old useful content", encoding="utf-8")
+            with patch.dict(chroma_conf, {"persist_directory": str(root / "db"), "data_path": str(data)}), patch(
+                    "rag.vector_store.get_embed_model", return_value=LocalEmbeddings()):
+                store = VectorStoreService(); store.load_document()
+                (data / "a.txt").write_text("a useful content", encoding="utf-8")
+
+                active = store.vector_store
+                original_get = active.get
+
+                def flaky_get(*args, **kwargs):
+                    if "where" in kwargs:
+                        raise RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+                    return original_get(*args, **kwargs)
+
+                with patch.object(active, "get", side_effect=flaky_get):
+                    message = store.load_document()
+
+                self.assertIn("增量更新", message)
+                self.assertEqual(store.count(), 2)
+                self.assertTrue(store._db_is_complete())
+
 
 class ConfigAndRagTests(unittest.TestCase):
     def test_env_is_project_anchored_and_external_env_wins(self):

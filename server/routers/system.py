@@ -47,11 +47,14 @@ def info():
 
 @router.post("/retry")
 async def retry():
-    if runtime.status()["ready"]:
-        return {"ok": True, **runtime.status()}
+    state = runtime.status()
+    # 已就绪或已有初始化在跑：立即返回当前进度，不再排一次队。
+    # bootstrap() 内部也是非阻塞抢锁，这里提前判断只是让响应语义更清楚。
+    if state["ready"] or state["booting"]:
+        return {"ok": state["ready"], **state}
     try:
         # bootstrap 会建库并装配 Agent，必须放到线程里，否则卡死事件循环
-        await asyncio.to_thread(runtime.bootstrap)
+        state = await asyncio.to_thread(runtime.bootstrap)
     except Exception as exc:  # noqa: BLE001 - 错误本身就是要给前端看的结果
         return {"ok": False, **runtime.status(), "error": f"{type(exc).__name__}: {exc}"}
-    return {"ok": True, **runtime.status()}
+    return {"ok": bool(state["ready"]), **state}
