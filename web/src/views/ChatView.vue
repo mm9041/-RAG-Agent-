@@ -8,7 +8,7 @@ import MessageItem from '../components/MessageItem.vue'
 import StageBar from '../components/StageBar.vue'
 import { useAuth } from '../composables/useAuth'
 import { useChat } from '../composables/useChat'
-import type { Message, SessionRow, SystemStatus } from '../types'
+import type { HistoryPage, Message, SessionRow, SystemStatus } from '../types'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +19,7 @@ const chat = useChat()
 const {
   messages,
   streaming,
+  stopping,
   stage,
   elapsed,
   stageElapsed,
@@ -34,6 +35,11 @@ const status = ref<SystemStatus | null>(null)
 const info = ref<{ indexed_files: number; chunks: number; models: Record<string, unknown> } | null>(null)
 const draft = ref('')
 const bootError = ref<string | null>(null)
+/** 已加载的历史在完整历史中的起始下标；点赞 key 依赖它，不能用页内下标 */
+const historyStart = ref(0)
+const historyTotal = ref(0)
+const hasMore = ref(false)
+const loadingEarlier = ref(false)
 /**
  * 侧栏是否可见。
  *
@@ -107,10 +113,13 @@ async function loadSessions() {
 async function loadHistory() {
   if (!currentThread.value) return
   try {
-    const res = await api.get<{ messages: Message[] }>(
-      `/api/sessions/${encodeURIComponent(currentThread.value)}/history`,
+    const res = await api.get<HistoryPage>(
+      `/api/sessions/${encodeURIComponent(currentThread.value)}/history?limit=60`,
     )
     chat.setMessages(res.messages)
+    historyStart.value = res.start
+    historyTotal.value = res.total
+    hasMore.value = res.has_more
     await settleScroll()
   } catch (err) {
     if (err instanceof ApiError && err.status === 403) {
@@ -122,6 +131,31 @@ async function loadHistory() {
     }
     if (err instanceof ApiError && err.status === 503) return
     chat.setMessages([])
+    historyStart.value = 0
+    historyTotal.value = 0
+    hasMore.value = false
+  }
+}
+
+/** 向上加载更早的一页，并补偿滚动位置，避免视图跳到顶部。 */
+async function loadEarlier() {
+  if (!hasMore.value || loadingEarlier.value) return
+  const box = scroller.value
+  const beforeHeight = box?.scrollHeight ?? 0
+  loadingEarlier.value = true
+  try {
+    const res = await api.get<HistoryPage>(
+      `/api/sessions/${encodeURIComponent(currentThread.value)}/history?limit=60&before=${historyStart.value}`,
+    )
+    chat.prependMessages(res.messages)
+    historyStart.value = res.start
+    hasMore.value = res.has_more
+    await nextTick()
+    if (box) box.scrollTop += box.scrollHeight - beforeHeight
+  } catch {
+    /* 加载失败保持原样，用户可再点一次 */
+  } finally {
+    loadingEarlier.value = false
   }
 }
 
@@ -304,7 +338,8 @@ async function onLike(payload: { index: number; answer: string }) {
   try {
     await api.post('/api/feedback/like', {
       thread_id: currentThread.value,
-      index: payload.index,
+      // 服务端按完整历史计下标，这里必须加上已加载部分的起点
+      index: historyStart.value + payload.index,
       question: findQuestion(payload.index),
       answer: payload.answer,
       sources: messages.value[payload.index]?.sources ?? [],
@@ -313,6 +348,26 @@ async function onLike(payload: { index: number; answer: string }) {
   } catch {
     /* 点赞失败不打断阅读 */
   }
+}
+
+/** 重新生成：先回退上一轮（连提问一起删），再把同一个问题重发一遍。 */
+async function regenerate(payload: { index: number }) {
+  if (streaming.value) return
+  const question = findQuestion(payload.index)
+  if (!question) return
+  try {
+    await api.post(`/api/sessions/${encodeURIComponent(currentThread.value)}/truncate`)
+  } catch {
+    return
+  }
+  chat.reset()
+  await loadHistory()
+  await chat.send(question, currentThread.value)
+  await loadSessions()
+}
+
+function isLastAssistant(index: number): boolean {
+  return index === messages.value.length - 1 && messages.value[index]?.role === 'assistant'
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -417,6 +472,13 @@ onUnmounted(() => {
       <template v-else>
         <div ref="scroller" class="main__scroll" @scroll.passive="onScroll">
           <div ref="content" class="main__inner">
+            <div v-if="hasMore" class="load-earlier">
+              <button class="btn" :disabled="loadingEarlier" @click="loadEarlier">
+                <span v-if="loadingEarlier" class="spin" />
+                {{ loadingEarlier ? '正在加载' : `加载更早的消息（共 ${historyTotal} 条）` }}
+              </button>
+            </div>
+
             <div v-if="me?.demo_mode" class="notice notice--warn">
               未设置 <code>APP_PASSWORD</code>，当前任何人可访问，仅供本地演示使用。
             </div>
@@ -438,7 +500,9 @@ onUnmounted(() => {
               :index="index"
               :thread-id="currentThread"
               :question="findQuestion(index)"
+              :can-regenerate="!streaming && isLastAssistant(index) && !message.incomplete"
               @like="onLike"
+              @regenerate="regenerate"
             />
 
             <StageBar
@@ -447,7 +511,7 @@ onUnmounted(() => {
               :elapsed="elapsed"
               :stage-elapsed="stageElapsed"
               :marks="marks"
-              :stopping="false"
+              :stopping="stopping"
             />
 
             <div v-else-if="elapsed > 0" class="stats">
@@ -554,6 +618,12 @@ onUnmounted(() => {
   font-size: 11.5px;
   color: var(--text-3);
   padding: 0 0 18px 42px;
+}
+
+.load-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 18px;
 }
 
 .mobile-bar {

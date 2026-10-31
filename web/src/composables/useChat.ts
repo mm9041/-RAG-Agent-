@@ -29,6 +29,8 @@ function newRequestId(): string {
 export function useChat() {
   const messages = ref<Message[]>([])
   const streaming = ref(false)
+  /** 已请求停止、但本轮尚未收尾。协作式停止需要等当前调用返回。 */
+  const stopping = ref(false)
   const stage = ref('')
   const elapsed = ref(0)
   const stageElapsed = ref(0)
@@ -217,6 +219,7 @@ export function useChat() {
         last.liked = false
       }
       streaming.value = false
+      stopping.value = false
       stopTicker()
       // 定格总耗时：ticker 已停，这里补最后一次，否则显示会少掉尾部零头
       elapsed.value = (performance.now() - startedAt) / 1000
@@ -227,6 +230,8 @@ export function useChat() {
   }
 
   async function stop() {
+    if (stopping.value) return
+    stopping.value = true
     const rid = requestId.value
     if (rid) {
       // 先送达取消信号，比依赖断连检测更即时；失败也无妨，abort 仍然有效
@@ -240,12 +245,18 @@ export function useChat() {
     error.value = null
   }
 
+  /** 向上翻页：把更早的一段插到最前面（调用方负责补偿滚动位置）。 */
+  function prependMessages(rows: Message[]) {
+    messages.value = [...rows.map((row) => ({ ...row })), ...messages.value]
+  }
+
   function reset() {
     abortController?.abort()
     stopTicker()
     pendingText = ''
     messages.value = []
     streaming.value = false
+    stopping.value = false
     error.value = null
     stage.value = ''
     marks.value = []
@@ -268,6 +279,7 @@ export function useChat() {
   return {
     messages,
     streaming,
+    stopping,
     stage,
     elapsed,
     stageElapsed,
@@ -279,6 +291,7 @@ export function useChat() {
     stop,
     reset,
     setMessages,
+    prependMessages,
     markLiked,
     setScrollHook,
   }

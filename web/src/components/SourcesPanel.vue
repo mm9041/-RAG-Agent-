@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 import type { Source } from '../types'
 
-const props = defineProps<{ sources: Source[] }>()
+const props = defineProps<{
+  sources: Source[]
+  /** 正文里点击 [n] 时传进来的引用编号，用于展开并定位到对应片段 */
+  highlight?: number | null
+}>()
 
 const open = ref(false)
 const expanded = ref<Set<number>>(new Set())
+const listEl = ref<HTMLElement>()
 
 const list = computed(() => {
   const seen = new Set<string>()
@@ -31,6 +36,23 @@ function toggleSnippet(index: number) {
   else next.add(index)
   expanded.value = next
 }
+
+function isActive(source: Source): boolean {
+  if (props.highlight === null || props.highlight === undefined) return false
+  return String(source.ref) === String(props.highlight)
+}
+
+watch(
+  () => props.highlight,
+  async (ref_) => {
+    if (ref_ === null || ref_ === undefined) return
+    open.value = true
+    await nextTick()
+    const target = listEl.value?.querySelector<HTMLElement>(`[data-ref="${ref_}"]`)
+    // block: 'nearest' 只滚到可见即止，避免整个页面被拽动
+    target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  },
+)
 </script>
 
 <template>
@@ -42,8 +64,14 @@ function toggleSnippet(index: number) {
       检索参考资料 · {{ list.length }} 个片段
     </button>
 
-    <div v-show="open" class="sources__list">
-      <div v-for="(source, index) in list" :key="index" class="source">
+    <div v-show="open" ref="listEl" class="sources__list">
+      <div
+        v-for="(source, index) in list"
+        :key="index"
+        class="source"
+        :class="{ 'source--active': isActive(source) }"
+        :data-ref="source.ref"
+      >
         <div class="source__meta">
           <span class="source__file">{{ label(source) }}</span>
           <span v-if="source.distance !== undefined">距离 {{ source.distance }}</span>

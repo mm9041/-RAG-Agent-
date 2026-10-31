@@ -50,3 +50,12 @@ export interface PhaseMark {
   label: string
   at: number
 }
+
+export interface HistoryPage {
+  thread_id: string
+  messages: Message[]
+  /** 本页在完整历史中的起始下标，点赞 key 依赖它，不能用页内下标 */
+  start: number
+  total: number
+  has_more: boolean
+}
