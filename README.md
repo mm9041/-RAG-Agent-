@@ -1,8 +1,8 @@
 # 智扫通机器人智能客服
 
-基于 LangChain `create_agent`、LangGraph 的扫地/扫拖机器人客服。后端 FastAPI，前端 Vue 3，包含知识库问答、多轮记忆、工具调用、回复点赞，以及独立管理控制台。
+基于 LangChain `create_agent`、LangGraph 的扫地/扫拖机器人客服。后端 FastAPI，前端 Vue 3，包含知识库问答、多轮记忆、工具调用、个人使用报告、回复点赞，以及独立管理控制台。
 
-已移除设备引导排障、报告生成/导出和人工转交功能。管理员登录后进入独立界面，8 小时内刷新可恢复登录。
+设备引导排障、报告导出与人工转交不提供；个人使用报告按需生成。管理员登录后进入独立界面，8 小时内刷新可恢复登录。
 
 架构取舍、API 清单与实测数据见 [FastAPI 重构说明](docs/FastAPI重构说明.md)。
 
@@ -58,7 +58,7 @@ cd web; npm run dev        # http://localhost:5173
 | `server/` | FastAPI 后端：路由、SSE 传输、鉴权、生命周期 |
 | `web/` | Vue 3 + Vite 前端 |
 | `agent/react_agent.py` | Agent 装配、事件流、身份校验、持久化历史 |
-| `agent/tools/agent_tools.py` | 当前注册工具：知识检索、联网天气（Tavily）、位置询问、用户 ID |
+| `agent/tools/agent_tools.py` | 当前注册的 7 个工具：知识检索、联网天气（Tavily）、位置询问、用户 ID、当前月份、使用记录取数、进入报告模式 |
 | `agent/tools/middleware.py` | 并发工具预算、模型预算、上下文裁剪、动态提示词 |
 | `rag/vector_store.py` | 切分、向量检索、增量构建与原子发布 |
 | `rag/reranker.py` | 重排、超时与失败降级 |
@@ -69,13 +69,13 @@ cd web; npm run dev        # http://localhost:5173
 | `eval/` | 检索基线、Agent 最终拒答及成本评估 |
 | `tests/` | 离线测试，使用模拟模型和临时数据库 |
 
-`get_current_month`、`fetch_external_data`、`enter_report_mode` 及相关配置仍留在源码中，但未注册到当前 Agent，不提供月份查询、个人使用记录取数或报告生成能力。
+报告能力由 `enter_report_mode` → `get_current_month` / 用户指定月份 → `fetch_external_data` 三个工具组成，见下方[个人使用报告](#个人使用报告)。月份数据来自 `data/external/records.csv`，是演示用的静态样本。
 
 ## 身份与会话
 
 - 用户身份由服务端签发的签名 cookie 决定，请求体里的 `user_id` 一律不采信；切换演示用户也由服务端重签。
 - 当前会话 ID 存在 URL 的 `chat` 参数里，刷新后恢复；不保存聊天正文、密码或管理员令牌。
-- 会话列表通过 SQL 先筛选 ID，每个会话只读取最新检查点。默认显示 20 个，但"清理其他会话"处理该身份的全部会话。
+- 会话列表通过 SQL 先筛选 ID，每个会话只读取最新检查点。接口最多返回 50 个（`list_threads` 的 `limit`），侧栏先显示最近 20 个、点「显示更多」按 20 递增展开；"清理其他会话"处理该身份的全部会话。
 - 公共会话读、写、删入口检查归属：只接受 `user-{ID}` 或 `user-{ID}-...`；ID 为数字字符串，避免前缀碰撞。
 - 删除需要界面二次确认。`checkpoints.sqlite` 保存完整消息，模型调用时裁剪上下文不会删除历史。
 
@@ -114,7 +114,7 @@ history = agent.load_history("user-1001", "1001")
 | `sources` | 本次检索引用的资料 |
 | `final` | 最终答复全文 |
 
-本机实测（"你好"）：答复首字 2.1 秒，完整回复 3.0 秒。**瓶颈是模型链路**——首次决策、检索、rerank、核对四段网络往返，换前端框架不影响这部分。
+本机实测（"你好"，`deepseek-v4.1-flash-1017`）：答复首字 0.91 秒，完整回复 1.08 秒。**瓶颈是模型链路**——首次决策、检索、rerank、核对四段网络往返，换前端框架不影响这部分。
 
 `config/agent.yml` 的 `decision_disable_thinking: true` 默认关闭首次工具决策和闲聊的思考；`answer_disable_thinking` 独立控制拿到工具结果后的模型调用。模型不支持 `enable_thinking` 时，将相关开关及 `config/model.yml` 的 `grounding_disable_thinking` 设为 `false`。
 
@@ -146,6 +146,10 @@ history = agent.load_history("user-1001", "1001")
 
 默认：向量粗召回 → 可选距离过滤 → rerank → 取前 k 条原文 → 受约束生成与引用校验 → 最终答复。
 
+**多意图问题会拆成多次检索**。一句话问两件事时，整句编码成一个向量会互相稀释：实测「我家 65 平木地板养了猫，吸力选多大？主刷多久清理一次？」里，回答"吸力"的块在 20 条粗召回中排第 13，重排取 top-3 必然选不到，最后被误判为"知识库未覆盖"。
+
+处理方式：`rag_service.split_multi_intent` 按问号切分（每段 ≥4 字、最多 3 段），工具层 `retrieval_queries` 决定用哪组子查询——**用户原话有多个问句时以原话为准**，单问句才用模型给的关键词（多轮追问"那电池呢？"仍需模型补全成可检索的查询）。合并时按 `chunk_id` 去重、引用编号连续；同一轮里重复的子查询直接短路，不会把同样的原文塞两遍。
+
 `config/chroma.yml` 控制 `k`、`rerank_fetch_k`、重排模型与超时。`max_distance` 默认关闭。重排失败降级为向量顺序，日志记录是否实际重排；侧栏显示索引统计和配置中的模型名称，不代表远端服务实时健康。
 
 `config/agent.yml` 的 `rag_raw_documents: true` 开启原文路径：普通问答直接把检索原文交给 Agent，减少一次摘要调用；设为 `false` 则先生成检索摘要。
@@ -156,13 +160,31 @@ history = agent.load_history("user-1001", "1001")
 
 位置工具没有定位能力：`get_user_location` 只会返回 `[需要用户城市]` 提示，由模型在回答中询问用户所在城市。`get_weather` 会拒绝"这里""当前"这类非城市名入参。
 
+## 个人使用报告
+
+用户明确要求生成或查询自己的使用报告时，模型按顺序调用三个工具：
+
+```
+enter_report_mode      进入报告模式（不调用它不得生成报告）
+get_current_month      取月份；用户已指定月份时直接用用户给的，不再查
+fetch_external_data    按 YYYY-MM 取该月使用记录
+```
+
+- 记录只能来自 `fetch_external_data` 的返回，不得编造、推算或补全；查不到时如实告知，并提示可能是月份不在数据范围内。
+- 数据源是 `data/external/records.csv`（演示用静态样本，10 个演示用户各 12 个月）。`config/agent.yml` 的 `demo_reference_month: "2025-12"` 让"最近/这个月"落到 2025-12，否则会取真实当前月份而查空。
+- 报告标题与分节要求写在 `prompts/report_addendum.txt`，由 `report_prompt_addendum` 追加到系统提示词。
+- **报告模式的 `covered` 语义不同**：问答模式表示"原文能否回答这个问题"，报告模式表示"记录是否足以支撑一份报告"。两者共用一套判定时，用户问的是"生成报告"而素材是数据表，会被偶发判成"不覆盖"（实测出现过 43 字拒答）。所以 `grounding` 在报告模式下使用独立的 system prompt。
+- 报告导出与人工转交不提供，用户提出时简要说明即可。
+
 ## Agent 预算
 
 | 配置 | 默认值 | 行为 |
 |---|---:|---|
 | `max_model_calls` | 12 | 每轮外层模型调用上限，最后一次移除工具以生成答复 |
 | `turn_timeout` | 180 秒 | 调用边界检查时间预算，超出后生成可持久化的结束提示 |
-| `context_max_chars` | 24000 | 按完整回合裁剪旧消息，保持当前工具消息配对 |
+| `context_max_chars` | 100000 | 按完整回合裁剪旧消息，保持当前工具消息配对 |
+
+`context_max_chars` 是**我们主动设的软上限**，不是模型窗口：它只决定发多少历史给模型。实测该端点 19 万字符仍能准确回忆开头，100k 字符约占窗口 7–10%。按一次检索 3 块原文（1200–1800 字符）算，够容纳 55–80 次检索结果；真正的作用是让长会话不提前丢早期回合。继续往上调要权衡成本——每轮都会重发全部历史。
 
 工具总预算为 10 次，其中检索最多 4 次，定义在 `agent/runtime.py`。预算检查与预留在锁内完成，避免并发超发。
 
@@ -176,7 +198,7 @@ history = agent.load_history("user-1001", "1001")
 python -m unittest discover -s tests -q
 ```
 
-当前 215 项。覆盖真实 LangGraph 工具身份注入、工具 schema、并发预算、停止收口、非 token 流答复、历史引用、跨身份隔离、20 个以上会话清理、Chroma 构建失败恢复、管理员令牌过期与撤销、日志脱敏等。
+当前 254 项。覆盖真实 LangGraph 工具身份注入、工具 schema、并发预算、停止收口、非 token 流答复、历史引用、跨身份隔离、超出上限的会话清理、多意图查询拆分与去重、async 函数里不得出现同步阻塞（AST 静态检查）、Chroma 构建失败恢复、管理员令牌过期与撤销、日志脱敏等。
 
 > 已知偶发：`IndexTests` 里 Chroma 的临时目录读写偶尔报 `Nothing found on disk`，重跑即过，与业务逻辑无关。
 
@@ -204,25 +226,32 @@ python -m eval.agent_eval --mode raw --output eval/agent-raw.json
 - `config/agent.yml`：Agent 预算、原文/摘要路径开关。
 - `config/prompts.yml`：提示词文件路径。
 
-### 角色模型（可选的提速手段）
+### 模型分工与实测
 
-一次带检索的问答只有两次模型调用：**首次工具决策** → **证据核对与受约束生成**（有资料时 `bound_model` 会短路掉草稿生成）。`config/model.yml` 允许把前者交给更快的模型：
+一次带检索的问答只有两次模型调用：**首次工具决策** → **证据核对与受约束生成**（有资料时 `bound_model` 会短路掉草稿生成）。`config/model.yml` 允许给这两段单独配模型：
 
 ```yaml
-decision_model_name: "qwen3.7-flash"   # 首次工具选择
-grounding_model_name: ""               # 留空 = 跟随 chat_model_name
+chat_model_name: "deepseek-v4.1-flash-1017"
+decision_model_name: "deepseek-v4.1-flash-1017"   # 首次工具选择
+grounding_model_name: ""                          # 留空 = 跟随 chat_model_name
 ```
 
-2026-10-31 实测（`tools/bench.py`，数据在 `eval/bench-*.json`）：
+角色键留空即跟随 `chat_model_name`，行为与不配完全一致。测试会忽略这两个配置（见 `tests/__init__.py`），避免假模型注入失效。
 
-| 配置 | 闲聊首字 | HEPA 首字 | 吸力首字 |
-|---|---:|---:|---:|
-| 全量 `qwen3.8-max` | 1.61s | 0.83s | 1.23s |
-| decision 换 flash | **0.77s** | **0.50s** | **0.66s** |
+2026-10-31 实测（`tools/bench.py`，原始数据在 `eval/bench-*.json`）：
 
-`decision` 换小模型约快 40–50%，三次都正确触发了检索。**`grounding` 不建议换**：同一问题输出从 195 字涨到 1342 字，"200 字内"的约束被无视，反而更慢。
+| 配置 | 闲聊 首字/final | HEPA 首字/final | 吸力 首字/final |
+|---|---|---|---|
+| 全量 `qwen3.8-max` | 1.61s / 2.00s | 0.83s / 5.19s | 1.23s / 6.20s |
+| 全量 `deepseek-v4.1-flash` | **0.91s / 1.08s** | **0.50s / 2.72s** | **0.66s / 2.50s** |
 
-两个键留空即恢复改动前行为。测试会忽略这两个配置（见 `tests/__init__.py`），避免假模型注入失效。
+三条结论：
+
+- **决策段用更小的模型确实更快**：`qwen3.8-max` → `qwen3.7-flash` 时首字快 40–50%，且都正确触发了检索。
+- **`grounding` 不建议换小模型**：同一问题输出从 195 字涨到 1342 字，"200 字内"的约束被无视，final 反而从 6.2s 变成 11.89s。
+- 当前 `chat` 与 `decision` 是同一个模型。这不是配置疏漏——`deepseek-v4.1-flash` 本身已经够快，再拆一个小模型收益有限；若换回更大的模型，再把 `decision_model_name` 换成 flash 即可。
+
+> 换模型时注意结构化输出方式：`grounding` 用 `with_structured_output(..., method="function_calling")`。deepseek 端点不支持 `response_format: json_schema`，用默认值会直接 400，导致所有带检索的回答退化成原文堆叠。`function_calling` 对 qwen 同样可用，所以换成任何一家都不必改代码。
 
 - SQLite 备份应使用 SQLite backup API，不能在运行期间只复制主文件而忽略 WAL。
 - 上游 LangChain/Pydantic 序列化警告仍可能出现；升级依赖后应重跑测试。

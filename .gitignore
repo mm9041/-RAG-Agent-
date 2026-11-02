@@ -17,13 +17,25 @@ web/dist/
 # 可由 data/ 目录重建，且含大量二进制文件，不入库
 chroma_db/
 
-# ===== 对话记忆（LangGraph checkpointer）=====
+# ===== 运行时数据库 =====
+# 对话记忆（LangGraph checkpointer）：含完整消息，且带 -wal/-shm/-bak 兄弟文件
 checkpoints.sqlite*
+# 点赞反馈
+feedback.sqlite*
+# 管理员令牌（服务端只存摘要，仍属运行时状态）
+admin_sessions.sqlite*
+# 模型配置热更新的跨进程锁
+.config_guard.sqlite*
+
+# 知识库发布的运行时状态：由 utils/knowledge_admin 写入，
+# 每台机器上的 model/scope/version 可能不同，且含文件锁
+data/.catalog.json
+data/.edit.lock
+# 发布时保留的历史版本，可由 data/ 重建
+kb_versions/
 
 # ===== 日志 =====
 logs/
-
-# ===== 旧版去重清单（已被 chroma_db/kb_meta.json 取代）=====
 
 # ===== Python =====
 __pycache__/
@@ -31,27 +43,30 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# ===== IDE =====
-.idea/
-.vscode/
-
 # ===== 虚拟环境 =====
 .venv/
 venv/
 env/
 
-feedback.sqlite*
-kb_versions/
+# ===== IDE =====
+.idea/
+.vscode/
+# Qoder 的画布与报告缓存，与项目无关
+.qoder-credits/
 
-# 知识库发布的运行时状态：由 utils/knowledge_admin 写入，
-# 每台机器上的 model/scope/version 可能不同，且含文件锁
-data/.catalog.json
-data/.edit.lock
+# ===== 工具产物 =====
+# tools/side-confirm-check.mjs 等脚本跑出来的截图
+tools/*.png
 
-admin_sessions.sqlite*
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
 
-.config_guard.sqlite*
+# ===== 本地备忘 =====
 /优化建议-2026-09-30.md
+/优化记录-2026-10-30.md
+/功能与测试说明.md
 
 # ===== 本地工作记忆（WorkBuddy）=====
 # 项目内的会话记录与记忆文件，属于本地工作数据
