@@ -3,8 +3,9 @@
 管理员凭据沿用 ``utils/admin_auth.py`` 的 sqlite 令牌机制（8 小时绝对过期、
 改密码即失效），此处只做 cookie 搬运，安全语义与旧版一致。
 
-所有会触碰磁盘索引的操作都走 ``to_thread``：发布资料会触发向量库重建，
-耗时从几秒到几分钟不等，绝不能占住事件循环。
+所有会触碰磁盘的操作都走 ``to_thread``：发布资料会触发向量库重建（几秒到
+几分钟），预览要读完整个资料目录做冲突检查——这些都是同步阻塞调用，
+留在事件循环里会把正在流的问答一起冻住。
 """
 from __future__ import annotations
 
@@ -185,12 +186,28 @@ def list_knowledge(_: str = Depends(admin_token)):
     return {"files": items}
 
 
+def _scan_conflicts(name: str, text: str) -> tuple[list[str], bool]:
+    """读取同目录其余 txt 并计算冲突提示。
+
+    整体是同步阻塞的（要把所有资料读进内存），必须由调用方丢进 ``to_thread``。
+    刻意不拆成"异步读 + 异步算"两段：读和算都占线程，拆开只会多一次切换。
+    """
+    from utils.knowledge_admin import conflict_hints
+
+    existing = "\n".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in _kb_files()
+        if p.name != name and p.suffix.lower() == ".txt"
+    )
+    return conflict_hints(text, existing), (_data_root() / name).exists()
+
+
 @router.post("/knowledge/preview")
 async def preview_knowledge(
     file: UploadFile = File(...),
     _: str = Depends(admin_token),
 ):
-    from utils.knowledge_admin import conflict_hints, preview
+    from utils.knowledge_admin import preview
 
     name = _safe_name(file.filename or "")
     content = await file.read()
@@ -199,18 +216,14 @@ async def preview_knowledge(
     except Exception as exc:  # noqa: BLE001 - 解析失败是预期分支（加密PDF/扫描件）
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    existing = "\n".join(
-        p.read_text(encoding="utf-8", errors="replace")
-        for p in _kb_files()
-        if p.name != name and p.suffix.lower() == ".txt"
-    )
-    warnings = await asyncio.to_thread(conflict_hints, text, existing)
+    # 读全部资料 + 算冲突 + 判断同名文件，三件事都是磁盘 IO，合并成一次 off-loop
+    warnings, exists = await asyncio.to_thread(_scan_conflicts, name, text)
     return {
         "name": name,
         "text": text[:5000],
         "truncated": len(text) > 5000,
         "warnings": warnings,
-        "exists": (_data_root() / name).exists(),
+        "exists": exists,
         "size": len(content),
     }
 
