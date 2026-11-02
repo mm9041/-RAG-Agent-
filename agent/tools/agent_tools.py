@@ -7,12 +7,13 @@ from datetime import datetime
 from functools import lru_cache
 
 from langchain.tools import ToolRuntime
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from agent.runtime import (EMPTY_REASON_NO_COVERAGE, EMPTY_REASON_NO_DOCS,
                            EMPTY_REASON_PHRASE, EMPTY_RETRIEVAL_MARKER,
                            NO_COVERAGE_MARKER)
-from rag.rag_service import RagSummarizeService
+from rag.rag_service import RagSummarizeService, split_multi_intent
 from utils.config_handler import agent_conf, chroma_conf, model_conf
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
@@ -124,6 +125,34 @@ def reference_month() -> str:
 
 # --------------------------------------------------------------------- 检索工具
 
+def _last_user_message(runtime: ToolRuntime) -> str:
+    """取本轮用户原话；取不到返回空串，调用方回退到模型给的关键词。"""
+    try:
+        messages = (runtime.state or {}).get("messages") or []
+    except Exception:  # noqa: BLE001 - state 结构变了不该让检索跟着挂
+        return ""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return str(message.content)
+    return ""
+
+
+def retrieval_queries(query: str, runtime: ToolRuntime) -> list[str]:
+    """决定这一轮用哪几个子查询检索。
+
+    模型习惯先把问题改写成关键词串（实测日志里是
+    「木地板 养猫宠物 吸力档位选择 主刷清理周期」这种）。改写会把**两个意图
+    糊进一条查询**，还会用知识库里根本不存在的词（"档位" 而不是「吸力参数
+    ≥3000Pa」），于是两块资料都召不回来，grounding 只能判不覆盖。
+
+    所以：用户原话里有多个问句时，**以原话拆分为准** —— 那是唯一可靠的意图边界；
+    只有单问句时才用模型给的关键词，那种情况改写通常有益，尤其是多轮追问
+    （"那电池呢？" 需要模型补全成"扫地机器人电池更换周期"才能检索）。
+    """
+    parts = split_multi_intent(_last_user_message(runtime))
+    return parts if len(parts) > 1 else [query]
+
+
 @tool(response_format="content_and_artifact", description=(
     "从扫地/扫拖机器人知识库中检索专业资料并总结成回答。"
     "入参 query 为贴合用户问题的核心检索词，纯文本字符串。"
@@ -155,11 +184,25 @@ def rag_summarize(query: str, runtime: ToolRuntime) -> tuple[str, dict]:
     # 现在 tests/test_tool_schema.py 专门守这条。
 
     raw = agent_conf.get("rag_raw_documents", False) and not (runtime.context or {}).get("report", False)
+    # 先定子查询再进锁：次数决定要预留多少个引用编号
+    queries = retrieval_queries(query, runtime)
     with _rag_service_lock:
         context = runtime.context if runtime.context is not None else {}
+        # 同一轮里重复检索同一批子查询没有意义：资料一样，只是把同样的原文
+        # 再塞一遍进上下文（实测两个问句一次，模型连调两次工具 → 12 条资料，
+        # 其中一半是重复的），还白烧掉一次工具预算。
+        done = context.setdefault("rag_done_queries", [])
+        fresh = [q for q in queries if q not in done]
+        if not fresh:
+            return ("本轮已经检索过相同内容，请直接使用前面工具返回的资料作答，"
+                    "不要重复调用本工具。", {"sources": [], "empty_reason": "duplicate_query"})
+        done.extend(fresh)
         ref_start = context.get("next_ref", 1)
-        context["next_ref"] = ref_start + int(chroma_conf["k"])
-    result = get_rag_service().summarize(query, raw=raw, ref_start=ref_start)
+        # 按**最坏情况**预留槽位：多意图会拆成多次检索，每次最多 k 条。
+        # 只按 k 预留会让后一次检索的编号覆盖前一次的（两个不同的块都叫 [4]），
+        # 引用校验从此失效。预留多了只会留下空号，无害。
+        context["next_ref"] = ref_start + int(chroma_conf["k"]) * len(fresh)
+    result = get_rag_service().summarize_many(fresh, raw=raw, ref_start=ref_start)
     if raw and not result.is_empty:
         return result.answer, {"sources": [asdict(source) for source in result.sources]}
 

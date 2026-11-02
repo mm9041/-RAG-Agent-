@@ -243,11 +243,13 @@ class ConfigAndRagTests(unittest.TestCase):
         from agent.tools.agent_tools import rag_summarize
         from rag.rag_service import RagResult
         from unittest.mock import Mock
-        service = Mock(); service.summarize.return_value = RagResult(answer="covered", doc_count=1)
+        # 单问句只有一条子查询，走 summarize_many 是内部实现细节，
+        # 这里守的仍是"报告模式必须 raw=False"这个契约。
+        service = Mock(); service.summarize_many.return_value = RagResult(answer="covered", doc_count=1)
         with patch.dict(agent_conf, {"rag_raw_documents":True}), patch(
             "agent.tools.agent_tools.get_rag_service", return_value=service):
             rag_summarize.func("q", SimpleNamespace(context={"report":True}))
-        service.summarize.assert_called_once_with("q", raw=False, ref_start=1)
+        service.summarize_many.assert_called_once_with(["q"], raw=False, ref_start=1)
 
 
 class ProviderAndUiTests(unittest.TestCase):

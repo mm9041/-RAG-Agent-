@@ -58,6 +58,11 @@ class AgentContext(TypedDict, total=False):
     # 本轮「连续空检索」次数：用于短路模型换措辞反复重试（每轮调用时重置）
     rag_empty_count: int
 
+    # 本轮已经检索过的子查询（字符串列表，不用 set 以免影响序列化）。
+    # 模型有时会连着两次调 rag_summarize 传同样的查询，第二次只会把同样的原文
+    # 再塞一遍进上下文，还白烧一次工具预算。
+    rag_done_queries: list[str]
+
     # 本轮已执行的工具调用次数：总数 + 按工具名，代码级预算用（每轮重置）
     tool_call_total: int
     tool_calls_by_name: dict[str, int]
