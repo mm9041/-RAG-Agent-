@@ -390,8 +390,13 @@ class ReactAgent:
 
     # -------------------------------------------------------------- 会话管理
 
-    def list_threads(self, user_id: str, limit: int | None = 20) -> list[dict]:
-        """SQL 先筛选会话 ID，每个会话只反序列化最新检查点。"""
+    def list_threads(self, user_id: str, limit: int | None = 50) -> list[dict]:
+        """SQL 先筛选会话 ID，每个会话只反序列化最新检查点。
+
+        ``limit`` 是"最多取多少个"，不是分页 —— 前端拿到全量后自己决定先显示几条。
+        取 50 是因为每个会话都要 ``get_tuple`` 反序列化一次，会话极多时这里会变慢；
+        真要无限翻页应该改成游标分页，而不是把 50 继续往上加。
+        """
         self.require_owner(f"user-{user_id}", user_id)
         base = f"user-{user_id}"
         with self.checkpointer.cursor(transaction=False) as cur:

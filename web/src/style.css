@@ -80,6 +80,8 @@ a {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 确认浮窗要靠它做定位参照 */
+  position: relative;
   /* 折叠时宽度平滑归零，主区域跟着变宽 */
   transition: width 0.18s ease, flex-basis 0.18s ease;
 }
@@ -126,6 +128,54 @@ a {
 .sidebar__foot {
   padding: 10px 12px 14px;
   border-top: 1px solid var(--line);
+}
+
+/* 侧栏内的确认浮窗
+   绝对定位在 .sidebar 上（而不是放在 .sidebar__body 里）：body 会滚动，
+   确认框跟着滚动就会跑到视野外——这正是原来内联块的问题。
+   inset:0 + place-items:center 让它稳定停在侧栏正中。 */
+.side-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: rgba(23, 24, 26, 0.26);
+  animation: side-confirm-in 0.12s ease;
+}
+
+.side-confirm__card {
+  width: 100%;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.side-confirm__text {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.side-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.side-confirm__btn {
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+
+@keyframes side-confirm-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .side-label {

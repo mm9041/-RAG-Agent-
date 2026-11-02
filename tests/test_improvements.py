@@ -68,16 +68,17 @@ class IdentityAndGraphTests(unittest.TestCase):
                 with self.assertRaises(PermissionError):
                     agent.load_history("user-2002", "1001")
 
-    def test_clear_all_over_twenty_preserves_other_owner(self):
+    def test_clear_all_beyond_limit_preserves_other_owner(self):
         with sqlite3.connect(":memory:", check_same_thread=False) as conn:
             cp = SqliteSaver(conn)
             with patch("agent.react_agent.get_chat_model", return_value=ScriptModel()):
                 agent = ReactAgent(cp)
-            for i in range(24):
+            # 造到**超过**默认上限，否则验证不到截断
+            for i in range(54):
                 agent.agent.update_state(agent._config(f"user-1001-{i}"), {"messages": [HumanMessage(content=str(i))]})
             agent.agent.update_state(agent._config("user-10010-keep"), {"messages": [HumanMessage(content="other")]})
-            self.assertEqual(len(agent.list_threads("1001")), 20)
-            self.assertEqual(agent.clear_other_threads("1001", "user-1001-0"), 23)
+            self.assertEqual(len(agent.list_threads("1001")), 50)
+            self.assertEqual(agent.clear_other_threads("1001", "user-1001-0"), 53)
             self.assertEqual(len(agent.list_threads("1001", None)), 1)
             self.assertEqual(len(agent.list_threads("10010", None)), 1)
 
